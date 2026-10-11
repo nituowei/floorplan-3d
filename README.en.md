@@ -2,11 +2,12 @@
 
 [中文](README.md) | English
 
-A pure front-end tool for interior design on a floor plan: place furniture, remove or modify walls, and take measurements on a 2D plan, then switch to a Three.js 3D scene with one click — view it from above or walk through it in first person. The whole app is a single `index.html`: no build step, just open it.
+A pure front-end tool for interior design on a floor plan: draw rooms and walls, place furniture, and take measurements on a 2D plan, then switch to a Three.js 3D scene with one click. The whole app is a single `index.html`: no build step, just open it.
 
 ## Features
 
 **2D Floor Plan**
+- Draw walls, rooms, doors, and windows in Edit Plan mode; move walls and room vertices with the mouse
 - Displays the original floor plan at 1:60 / 1:100 scale, dimensions in mm
 - Drag 60+ furniture and appliance items from the library on the left (bedroom, living room, dining & kitchen, bathroom, appliances, study & leisure)
 - Move, rotate (hold Shift for free angle), and resize items, with automatic snapping to walls
@@ -49,7 +50,8 @@ python3 -m http.server 8000
 | Key | Action |
 | --- | --- |
 | `T` | Toggle 2D / 3D |
-| `V` / `M` / `X` | Select / Measure / Modify walls |
+| `V` / `M` / `X` / `P` | Select / Measure / Demolish walls / Edit plan |
+| `Enter` | Finish a room polygon while drawing |
 | `R` / `Shift+R` | Rotate selected furniture 90° clockwise / counterclockwise |
 | `Delete` / `Backspace` | Delete selected furniture |
 | `Ctrl/⌘ + D` | Duplicate selected furniture |
@@ -69,6 +71,12 @@ python3 -m http.server 8000
 - Data stored in `localStorage`
 
 ## Customizing the Floor Plan
+
+Click **Edit Plan** in the 2D toolbar and choose a drawing tool in the right panel. Clear the sample plan to start from scratch (undoable); export a JSON backup first if needed. Drag to draw horizontal or vertical walls and openings. Click room vertices, then press Enter or double-click to finish; rename the new room in the right panel. Use Select to move walls, resize them with the white handles, reshape rooms by dragging vertices, or delete selected geometry. Rooms and walls are separate shapes and must be aligned from your measurements. Drawing a door or window on a single aligned wall segment cuts an opening in it; for complex intersections, draw the wall segments around the opening.
+
+Geometry is saved with furniture in browser local storage and in exported plan JSON. GitHub Pages hosts the app files, not visitor plans. Older furniture-only JSON plans can still be imported with the built-in geometry.
+
+To change the built-in plan shown on a fresh browser, edit the defaults in `index.html`:
 
 The floor plan data lives in `index.html`:
 
