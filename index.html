@@ -74,6 +74,9 @@ main{position:relative;overflow:hidden;background:var(--paper)}
 .modehint{position:absolute;left:50%;top:12px;transform:translateX(-50%);background:var(--ink);color:#fff;
   padding:5px 12px;border-radius:20px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none}
 .modehint.show{opacity:.9}
+#commandHint{position:absolute;left:50%;top:45px;transform:translateX(-50%);background:#e7f1ff;color:#1555a0;
+  border:1px solid #2b73c5;border-radius:7px;padding:4px 10px;font:12px ui-monospace,Menlo,monospace;display:none;pointer-events:none}
+#commandHint.show{display:block}
 footer{grid-column:1/-1;display:flex;gap:18px;align-items:center;padding:0 14px;background:var(--panel);overflow:hidden;white-space:nowrap;
   border-top:1px solid var(--line);color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 #tip{overflow:hidden;text-overflow:ellipsis}
@@ -97,6 +100,9 @@ tr.click:hover td{background:#faf5ee}
 .form input[type=color]{padding:2px;height:30px}
 .actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .actions .btn{border:1px solid var(--line);background:#fff}
+.actions .btn.on,.actions .btn.on:hover{background:#e7f1ff;color:#1555a0;border-color:#2b73c5;box-shadow:inset 0 0 0 1px #2b73c5;font-weight:600}
+.actions .btn:focus-visible{outline:2px solid #2b73c5;outline-offset:2px}
+.actions .btn kbd{margin-left:5px;padding:0;background:transparent;border:0;color:inherit;font-weight:600}
 .mats{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .mat{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff;cursor:pointer;text-align:left}
 .mat.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
@@ -240,9 +246,9 @@ main.drawer-panel #fab{opacity:0;visibility:hidden}
     </div>
     <div class="grp only2d" id="tools">
       <button class="btn on" data-tool="select" title="选择 / 移动 (V)" data-en-title="Select / Move (V)" data-en="Select">选择</button>
-      <button class="btn" data-tool="measure" title="测量 (M)" data-en-title="Measure (M)" data-en="Measure">测量</button>
-      <button class="btn" data-tool="demolish" title="拆改非承重墙 (X)" data-en-title="Demolish non-bearing walls (X)" data-en="Demolish">拆改墙体</button>
-      <button class="btn" data-tool="plan" title="绘制和修改基础户型 (P)" data-en-title="Draw and edit the floor plan (P)" data-en="Edit plan">编辑户型</button>
+      <button class="btn" data-tool="measure" title="测量 (DI)" data-en-title="Measure (DI)" data-en="Measure">测量</button>
+      <button class="btn" data-tool="demolish" title="拆改非承重墙 (DE)" data-en-title="Demolish non-bearing walls (DE)" data-en="Demolish">拆改墙体</button>
+      <button class="btn" data-tool="plan" title="绘制和修改基础户型 (M / L / PL)" data-en-title="Draw and edit the floor plan (M / L / PL)" data-en="Edit plan">编辑户型</button>
     </div>
     <div class="grp only2d">
       <button class="btn" id="zoomOut" title="缩小" data-en-title="Zoom out">−</button>
@@ -333,6 +339,7 @@ main.drawer-panel #fab{opacity:0;visibility:hidden}
     </div>
     <div class="scalebar" id="scalebar"><span id="sbText">1 m</span><div class="bar" id="sbBar"></div></div>
     <div class="modehint" id="modehint"></div>
+    <div id="commandHint" aria-live="polite"></div>
     <div id="fab"></div>
   </main>
 
@@ -977,18 +984,18 @@ function deletePlanSelection(){
   });
 }
 function planPanel(){
-  const modes=[['select',tr('选择 / 拖动','Select / drag')],['wall',tr('画墙','Draw wall')],['room',tr('画房间','Draw room')],['door',tr('画平开门','Draw door')],['window',tr('画窗','Draw window')],['slide',tr('画推拉门','Draw sliding door')]];
+  const modes=[['select',tr('选择 / 拖动','Select / drag'),'M'],['wall',tr('画墙','Draw wall'),'L'],['room',tr('画房间','Draw room'),'PL'],['door',tr('画平开门','Draw door'),'DR'],['window',tr('画窗','Draw window'),'WI'],['slide',tr('画推拉门','Draw sliding door'),'SL']];
   let detail=''; const s=ui.sel;
   if(s?.kind==='wall' && WALLS[s.index]){const w=WALLS[s.index];detail=`<section><h3>${tr('所选墙体','Selected wall')}</h3><div class="form"><label>${tr('类型','Type')}<select id="selWallType"><option value="n" ${w[4]==='n'?'selected':''}>${tr('普通隔墙','Partition')}</option><option value="e" ${w[4]==='e'?'selected':''}>${tr('外墙','Exterior')}</option><option value="b" ${w[4]==='b'?'selected':''}>${tr('承重墙','Bearing')}</option><option value="low" ${w[4]==='low'?'selected':''}>${tr('矮墙','Low wall')}</option></select></label></div><div class="muted">${Math.max(w[2]-w[0],w[3]-w[1])} × ${Math.min(w[2]-w[0],w[3]-w[1])} mm</div><div class="actions"><button class="btn danger" id="planDelete">${tr('删除墙体','Delete wall')}</button></div></section>`;}
   if(s?.kind==='room'){const r=ROOMS.find(r=>r.id===s.id);if(r)detail=`<section><h3>${tr('所选房间','Selected room')}</h3><div class="form"><label class="full">${tr('名称','Name')}<input id="planRoomName" value="${esc(state.rooms[r.id].name)}"></label><label>${tr('地面','Floor')}<select id="planRoomMat">${Object.entries(MATS).map(([key,m])=>`<option value="${key}" ${state.rooms[r.id].mat===key?'selected':''}>${nm(m.name)}</option>`).join('')}</select></label></div><div class="muted">${fmt(area(r.poly))} m² · ${tr('拖动白色顶点改变形状','Drag white handles to reshape')}</div><div class="actions"><button class="btn danger" id="planDelete">${tr('删除房间','Delete room')}</button></div></section>`;}
   if(s?.kind==='opening') detail=`<section><h3>${tr('所选门窗','Selected opening')}</h3><div class="actions"><button class="btn danger" id="planDelete">${tr('删除门窗','Delete opening')}</button></div></section>`;
-  return `<section><h3>${tr('户型绘图','Floor plan editor')}</h3><div class="actions">${modes.map(([k,v])=>`<button class="btn ${ui.planTool===k?'on':''}" data-plan-tool="${k}">${v}</button>`).join('')}</div>
+  return `<section><h3>${tr('户型绘图','Floor plan editor')}</h3><div class="actions">${modes.map(([k,v,key])=>`<button class="btn ${ui.planTool===k?'on':''}" data-plan-tool="${k}" aria-pressed="${ui.planTool===k}" title="${tr('快捷键','Shortcut')}: ${key}">${v}<kbd>${key}</kbd></button>`).join('')}</div>
     <div class="form" style="margin-top:12px"><label>${tr('墙体类型','Wall type')}<select id="planWallType"><option value="n" ${ui.wallType==='n'?'selected':''}>${tr('普通隔墙','Partition')}</option><option value="e" ${ui.wallType==='e'?'selected':''}>${tr('外墙','Exterior')}</option><option value="b" ${ui.wallType==='b'?'selected':''}>${tr('承重墙','Bearing')}</option><option value="low" ${ui.wallType==='low'?'selected':''}>${tr('矮墙','Low wall')}</option></select></label><label>${tr('墙厚','Wall thickness')} (mm)<input id="planWallWidth" type="number" min="50" max="1000" step="10" value="${ui.wallWidth}"></label></div>
-    <p class="muted">${tr('画墙、门、窗：按住鼠标拖动。画房间：依次点击顶点，双击或按 Enter 完成。选择工具可拖动墙体，拖动白色点可改尺寸。滚轮缩放。', 'Drag to draw walls and openings. Click room corners, then double-click or press Enter. Select to move walls; drag white handles to resize. Wheel to zoom.')}</p>
+    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动。画房间：逐点点击，双击或 Enter 完成。M 选择并拖动墙体，拖动白色点改尺寸。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings. Click room corners, then double-click or Enter. M selects and drags walls; drag white handles to resize.')}</p>
     <div class="actions"><button class="btn danger" id="planClear">${tr('清空户型，重新绘制','Clear plan and start over')}</button></div></section>${detail}`;
 }
 function bindPlanPanel(){
-  document.querySelectorAll('[data-plan-tool]').forEach(b=>b.onclick=()=>{ui.planTool=b.dataset.planTool;ui.draftPoly=[];ui.draftCursor=null;ui.sel=null;renderAll();});
+  document.querySelectorAll('[data-plan-tool]').forEach(b=>b.onclick=()=>setPlanTool(b.dataset.planTool));
   $('#planWallType').onchange=e=>ui.wallType=e.target.value;
   $('#planWallWidth').onchange=e=>ui.wallWidth=Math.max(50,Math.min(1000,Math.round(+e.target.value/10)*10||240));
   $('#planClear').onclick=()=>{if(confirm(tr('清空墙、房间、门窗和家具，并从空白户型重新开始？可撤销。','Clear walls, rooms, openings and furniture? This can be undone.'))){mutate(()=>{state.plan={walls:[],wins:[],doors:[],slides:[],rooms:[]};state.rooms={};state.demolished=[];state.furniture=[];state.measures=[];ui.sel=null;});fitView();}};
@@ -1060,13 +1067,17 @@ function overviewPanel(){
     <kbd>3D walk</kbd><span>Joystick moves, drag to look, tap doors to open</span>
   </div></section>`) : ''}
   ${tr(`<section><h3>键盘快捷键</h3><div class="kbd">
-    <kbd>拖拽</kbd><span>左侧家具拖入平面图</span><kbd>V</kbd><span>选择 / 移动</span><kbd>M</kbd><span>测量（Shift 水平/垂直）</span>
-    <kbd>X</kbd><span>拆改非承重墙（黑色为承重墙）</span><kbd>R</kbd><span>旋转 90°（Shift 反向）</span><kbd>方向键</kbd><span>微调 10mm（Shift 100mm）</span>
-    <kbd>⌘/Ctrl D</kbd><span>复制</span><kbd>Delete</kbd><span>删除</span><kbd>⌘/Ctrl Z</kbd><span>撤销</span><kbd>T</kbd><span>切换 2D / 3D</span><kbd>F</kbd><span>适应窗口</span><kbd>Esc</kbd><span>取消选择</span>
+    <kbd>M</kbd><span>户型选择 / 拖动墙体</span><kbd>L</kbd><span>画墙</span><kbd>PL</kbd><span>画房间轮廓</span>
+    <kbd>DR / WI / SL</kbd><span>画平开门 / 窗 / 推拉门（应用专用）</span><kbd>DI</kbd><span>测距</span><kbd>DE</kbd><span>拆改非承重墙（应用专用）</span>
+    <kbd>E / Delete</kbd><span>删除所选对象</span><kbd>CO</kbd><span>复制所选家具</span><kbd>RO</kbd><span>旋转所选家具 90°（Shift 反向）</span>
+    <kbd>V</kbd><span>家具选择</span><kbd>ZE / F</kbd><span>适应窗口</span><kbd>T</kbd><span>切换 2D / 3D</span><kbd>Enter</kbd><span>完成房间轮廓</span>
+    <kbd>Esc</kbd><span>取消当前操作</span><kbd>方向键</kbd><span>微调家具 10mm（Shift 100mm）</span><kbd>⌘/Ctrl Z</kbd><span>撤销</span>
   </div></section>`, `<section><h3>Keyboard Shortcuts</h3><div class="kbd">
-    <kbd>Drag</kbd><span>Drag furniture onto the plan</span><kbd>V</kbd><span>Select / move</span><kbd>M</kbd><span>Measure (Shift: horizontal/vertical)</span>
-    <kbd>X</kbd><span>Demolish non-bearing walls (black = bearing)</span><kbd>R</kbd><span>Rotate 90° (Shift reverses)</span><kbd>Arrows</kbd><span>Nudge 10mm (Shift 100mm)</span>
-    <kbd>⌘/Ctrl D</kbd><span>Duplicate</span><kbd>Delete</kbd><span>Delete</span><kbd>⌘/Ctrl Z</kbd><span>Undo</span><kbd>T</kbd><span>Toggle 2D / 3D</span><kbd>F</kbd><span>Fit to window</span><kbd>Esc</kbd><span>Deselect</span>
+    <kbd>M</kbd><span>Select / drag plan walls</span><kbd>L</kbd><span>Draw wall</span><kbd>PL</kbd><span>Draw room polygon</span>
+    <kbd>DR / WI / SL</kbd><span>Draw door / window / sliding door (app aliases)</span><kbd>DI</kbd><span>Measure distance</span><kbd>DE</kbd><span>Demolish non-bearing wall (app alias)</span>
+    <kbd>E / Delete</kbd><span>Erase selection</span><kbd>CO</kbd><span>Copy selected furniture</span><kbd>RO</kbd><span>Rotate selected furniture 90° (Shift reverses)</span>
+    <kbd>V</kbd><span>Select furniture</span><kbd>ZE / F</kbd><span>Fit to window</span><kbd>T</kbd><span>Toggle 2D / 3D</span><kbd>Enter</kbd><span>Finish room polygon</span>
+    <kbd>Esc</kbd><span>Cancel current action</span><kbd>Arrows</kbd><span>Nudge furniture 10mm (Shift 100mm)</span><kbd>⌘/Ctrl Z</kbd><span>Undo</span>
   </div></section>`)}`;
 }
 function bindOverview(){
@@ -1238,6 +1249,12 @@ function setTool(t){
   document.querySelectorAll('#tools .btn').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   syncModeHint();
   renderMeasure(); renderEditor(); renderPanel(); renderSel();
+}
+function setPlanTool(kind){
+  if(is3D()) return;
+  if(ui.tool!=='plan') setTool('plan');
+  ui.planTool=kind; ui.draftPoly=[]; ui.draftCursor=null; ui.sel=null;
+  renderAll();
 }
 function syncModeHint(){
   const hints = {select:'',
@@ -1486,27 +1503,62 @@ svg.addEventListener('contextmenu', e => { if (ui.tool==='measure'){ e.preventDe
 
 
 /* ======================= 键盘 ======================= */
+const cadAliases={
+  pl:()=>setPlanTool('room'),
+  dr:()=>setPlanTool('door'), wi:()=>setPlanTool('window'), sl:()=>setPlanTool('slide'),
+  di:()=>setTool('measure'), de:()=>setTool('demolish'),
+  co:()=>duplicateSel(), ro:shift=>rotateSel(shift?-90:90), ze:()=>fitView()
+};
+let cadPrefix='', cadTimer;
+function clearCadPrefix(){
+  cadPrefix=''; clearTimeout(cadTimer); $('#commandHint').classList.remove('show'); $('#commandHint').textContent='';
+}
+document.addEventListener('pointerdown',clearCadPrefix,true);
+function cadLetter(k,shift){
+  const alias=cadPrefix+k;
+  if(cadPrefix && cadAliases[alias]){clearCadPrefix();cadAliases[alias](shift);return true;}
+  clearCadPrefix();
+  if(Object.keys(cadAliases).some(a=>a.startsWith(k))){
+    cadPrefix=k; $('#commandHint').textContent=k.toUpperCase()+'…'; $('#commandHint').classList.add('show');
+    cadTimer=setTimeout(clearCadPrefix,1500);return true;
+  }
+  if(k==='m'){setPlanTool('select');return true;}
+  if(k==='l'){setPlanTool('wall');return true;}
+  if(k==='v'){setTool('select');return true;}
+  if(k==='e'){deleteSel();return true;}
+  if(k==='t'){setView(is3D()?'2d':'3d');return true;}
+  if(k==='f'){fitView();return true;}
+  return false;
+}
 document.addEventListener('keydown', e => {
-  if (e.target.matches('input,select,textarea')) return;
+  if (e.target.matches('input,select,textarea,[contenteditable]')){clearCadPrefix();return;}
   if (window.View3D?.walking()) return;
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
   if (mod && k === 'z'){ e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && k === 'y'){ e.preventDefault(); redo(); return; }
   if (mod && k === 'd'){ e.preventDefault(); duplicateSel(); return; }
-  if (mod) return;
+  if (mod || e.altKey) {clearCadPrefix();return;}
   if (k === '[' || k === ']'){ drawer(k === '[' ? 'lib' : 'panel'); return; }
   if (k === 'f' && e.shiftKey){ toggleFullscreen(); return; }
-  if (k === 't') setView(is3D() ? '2d' : '3d');
-  else if (is3D() && ['v','m','x','p','f','+','=','-'].includes(k)) return;
-  else if (k === 'v') setTool('select');
-  else if (k === 'p') setTool('plan');
-  else if (k === 'm') setTool('measure');
-  else if (k === 'x') setTool('demolish');
-  else if (k === 'f') fitView();
-  else if (k === 'r') rotateSel(e.shiftKey ? -90 : 90);
-  else if (k === 'delete' || k === 'backspace'){ e.preventDefault(); deleteSel(); }
-  else if (k === 'enter' && ui.tool==='plan' && ui.planTool==='room'){ e.preventDefault(); finishRoom(); }
-  else if (k === 'escape'){ if(ui.tool==='plan' && ui.draftPoly.length){ui.draftPoly=[];ui.draftCursor=null;renderEditor();} else if (ui.mA){ ui.mA = null; renderMeasure(); } else { if (ui.tool !== 'select') setTool('select'); select(null); } }
+  if(k==='escape'){
+    if(cadPrefix){clearCadPrefix();return;}
+    if(ui.tool==='plan'){
+      if(ui.draftPoly.length){ui.draftPoly=[];ui.draftCursor=null;renderEditor();}
+      else if(ui.planTool!=='select')setPlanTool('select');
+      else{ui.sel=null;renderAll();}
+    } else if(ui.mA){ui.mA=null;renderMeasure();}
+    else{if(ui.tool!=='select')setTool('select');select(null);}
+    return;
+  }
+  if(k==='enter' && ui.tool==='plan' && ui.planTool==='room'){e.preventDefault();clearCadPrefix();finishRoom();return;}
+  if(is3D() && k!=='t')return;
+  if(/^[a-z]$/.test(k)){
+    if(e.repeat)return;
+    if(cadLetter(k,e.shiftKey))e.preventDefault();
+    return;
+  }
+  clearCadPrefix();
+  if (k === 'delete' || k === 'backspace'){ e.preventDefault(); deleteSel(); }
   else if (k.startsWith('arrow') && ui.sel?.kind === 'furn'){
     e.preventDefault(); const st = e.shiftKey ? 100 : 10;
     mutate(() => { const f = getF(ui.sel.id); if (k==='arrowleft') f.cx -= st; if (k==='arrowright') f.cx += st; if (k==='arrowup') f.cy -= st; if (k==='arrowdown') f.cy += st; });

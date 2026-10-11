@@ -50,18 +50,23 @@ python3 -m http.server 8000
 | Key | Action |
 | --- | --- |
 | `T` | Toggle 2D / 3D |
-| `V` / `M` / `X` / `P` | Select / Measure / Demolish walls / Edit plan |
+| `M` / `L` / `PL` | Select and drag plan walls / draw wall / draw room polygon |
+| `DR` / `WI` / `SL` | Draw door / window / sliding door (app-specific aliases) |
+| `DI` / `DE` | Measure distance / demolish non-bearing walls (`DE` is app-specific) |
+| `E` / `Delete` / `Backspace` | Erase selected plan object or furniture |
+| `CO` / `RO` | Copy / rotate selected furniture (`Shift+RO` reverses rotation) |
+| `V` | Leave plan editing and select furniture |
 | `Enter` | Finish a room polygon while drawing |
-| `R` / `Shift+R` | Rotate selected furniture 90° clockwise / counterclockwise |
-| `Delete` / `Backspace` | Delete selected furniture |
 | `Ctrl/⌘ + D` | Duplicate selected furniture |
 | `Ctrl/⌘ + Z`, `Ctrl/⌘ + Shift + Z` | Undo, redo |
-| `F` | Fit to window |
+| `ZE` / `F` | Fit to window |
 | `+` / `-` | Zoom in / out |
 | `[` / `]` | Show / hide the furniture library (left) and the side panel (right) |
 | `Shift + F` | Fullscreen |
-| `Esc` | Cancel current action |
+| `Esc` | Cancel the current action; return to the select tool while editing a plan |
 | Walkthrough: `WASD` / arrow keys, `Shift`, `E` | Move, walk faster, open / close doors |
+
+Type two-letter commands in sequence (for example `P` then `L`), without pressing Enter. A blue hint shows the pending letter. Common aliases follow AutoCAD conventions; opening and demolition aliases are specific to this app.
 
 ## Tech Stack
 
