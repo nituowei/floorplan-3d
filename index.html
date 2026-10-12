@@ -575,7 +575,8 @@ const validRect = r => Array.isArray(r) && r.length>=4 && r.slice(0,4).every(Num
 function validPlan(p){
   return p && ['walls','wins','doors','slides','rooms'].every(k=>Array.isArray(p[k])) &&
     p.walls.every(w=>validRect(w) && ['n','e','b','low'].includes(w[4]) &&
-      (w[5] === undefined || Number.isFinite(w[5]) && w[5]>=100 && w[5]<=6000)) &&
+      (w[5] == null || Number.isFinite(w[5]) && w[5]>=100 && w[5]<=6000) &&
+      (w[6]===undefined || w[6]==='h' || w[6]==='v')) &&
     p.wins.every(w=>validRect(w) && (w[4]==null || Number.isFinite(w[4]) && w[4]>=0 && w[4]<=6) &&
       (w[5]==null || Number.isInteger(w[5]) && w[5]>=100 && w[5]<=6000) && validOpeningCuts(w[6])) &&
     p.doors.every(d=>validRect(d.rect) && Array.isArray(d.h) && d.h.length===2 && d.h.every(Number.isFinite) &&
@@ -587,7 +588,8 @@ function validPlan(p){
       (!r.at || Array.isArray(r.at) && r.at.length===2 && r.at.every(Number.isFinite))) &&
     new Set(p.rooms.map(r=>r.id)).size===p.rooms.length;
 }
-function validOpeningCuts(cuts){return cuts===undefined || Array.isArray(cuts) && cuts.every(w=>validRect(w) && ['n','e','b','low'].includes(w[4]));}
+function validOpeningCuts(cuts){return cuts===undefined || Array.isArray(cuts) && cuts.every(w=>validRect(w) && ['n','e','b','low'].includes(w[4]) &&
+  (w[5]==null || Number.isFinite(w[5]) && w[5]>=100 && w[5]<=6000) && (w[6]===undefined || w[6]==='h' || w[6]==='v'));}
 function load(){
   try { const s = JSON.parse(localStorage.getItem(STORE)); if (s && Array.isArray(s.furniture)) return fixState(s); } catch(e) {}
   return null;
@@ -996,6 +998,85 @@ function snapPlanWallEdge(p,index,edge){
   ui.snapGuides=snapped.guide?[snapped.guide]:[];
   return {...q,[axis]:snapped.value};
 }
+function openingWallHost(p,slot,length=0){
+  if(!ui.layers.smartSnap)return null;
+  const tol=planSnapTolerance(),byTrack=new Map();
+  WALLS.forEach((wall,index)=>{
+    if(state.demolished.includes('w'+index))return;
+    const horizontal=wallIsHorizontal(wall),along=horizontal?0:1,cross=horizontal?1:0;
+    const center=(wall[cross]+wall[cross+2])/2;
+    const distance=Math.max(0,Math.abs(p[cross?'y':'x']-center)-(wall[cross+2]-wall[cross])/2);
+    const alongValue=p[along?'y':'x'],gap=Math.max(wall[along]-alongValue,alongValue-wall[along+2],0);
+    if(distance>=tol||gap>length/2+tol)return;
+    const id=`host:${horizontal?'h':'v'}:${wall[cross]}:${wall[cross+2]}`;
+    const option={id,wallIndex:index,distance:distance+gap*.2,kind:'center',target:center};
+    if(!byTrack.has(id)||option.distance<byTrack.get(id).distance)byTrack.set(id,option);
+  });
+  const options=[...byTrack.values()].sort((a,b)=>a.distance-b.distance);
+  if(!options.length)return null;
+  if(drag?.kind?.startsWith('plan-'))(drag.snapGroups ||= []).push({key:slot,axis:wallIsHorizontal(WALLS[options[0].wallIndex])?'y':'x',options});
+  const chosen=options.find(option=>drag?.snapOverride?.key===slot&&drag.snapOverride.id===option.id)||options[0];
+  const wall=WALLS[chosen.wallIndex],axis=wallIsHorizontal(wall)?'y':'x';
+  return {wall,index:chosen.wallIndex,guide:{axis,value:chosen.target,kind:'center',key:slot,id:chosen.id,choice:options.indexOf(chosen)+1,count:options.length}};
+}
+function openingAlongSnap(raw,wall,slot){
+  const axis=wallIsHorizontal(wall)?'x':'y',a=axis==='x'?0:1,b=a+2;
+  const values=[{value:wall[a],target:wall[a],kind:'edge'},
+    {value:(wall[a]+wall[b])/2,target:(wall[a]+wall[b])/2,kind:'midpoint'},
+    {value:wall[b],target:wall[b],kind:'edge'}];
+  return nearestPlanValue(raw,Math.round(raw),values,planSnapTolerance(),axis,slot);
+}
+function openingDraftRect(a,b,wall){
+  if(!wall)return planRect(a,b);
+  return wallIsHorizontal(wall)?[Math.min(a.x,b.x),wall[1],Math.max(a.x,b.x),wall[3]]
+    :[wall[0],Math.min(a.y,b.y),wall[2],Math.max(a.y,b.y)];
+}
+function snapOpeningMoveRect(rect){
+  const center={x:(rect[0]+rect[2])/2,y:(rect[1]+rect[3])/2};
+  const host=openingWallHost(center,'opening:host',openingLength(rect));
+  if(!host){ui.snapGuides=[];return rect;}
+  const wall=host.wall,horizontal=wallIsHorizontal(wall),along=horizontal?0:1,cross=horizontal?1:0;
+  const length=openingLength(rect),raw=center[along?'y':'x'],axis=horizontal?'x':'y';
+  const candidates=[];
+  for(const source of [raw-length/2,raw,raw+length/2])for(const target of [wall[along],(wall[along]+wall[along+2])/2,wall[along+2]])
+    candidates.push({value:target-source,target,kind:target===(wall[along]+wall[along+2])/2?'midpoint':'edge'});
+  const shift=nearestPlanValue(0,0,candidates,planSnapTolerance(),axis,'opening:along');
+  const middle=Math.round(raw+shift.value),lo=Math.round(middle-length/2),hi=lo+length;
+  ui.snapGuides=[host.guide,shift.guide].filter(Boolean);
+  return horizontal?[lo,wall[cross],hi,wall[cross+2]]:[wall[cross],lo,wall[cross+2],hi];
+}
+function snapOpeningResizeRect(rect,edges,type,gap){
+  if(!ui.layers.smartSnap){ui.snapGuides=[];return rect;}
+  const result=[...rect],guides=[],horizontal=openingHorizontal(rect);
+  for(const edge of edges){
+    const axis=edge%2===0?'y':'x',coordinate=edge===0?1:edge===1?2:edge===2?3:0;
+    const candidates=[];
+    for(const wall of planWallTargets())for(const feature of wallAxisFeatures(wall,axis))
+      candidates.push({value:feature.value,target:feature.value,kind:feature.kind});
+    const snap=nearestPlanValue(result[coordinate],result[coordinate],candidates,planSnapTolerance(),axis,`opening-resize:${edge}`);
+    if(!snap.guide)continue;
+    const proposed=[...result];proposed[coordinate]=snap.value;
+    const limits=openingLimits(type,proposed),length=openingLength(proposed),depth=openingDepth(proposed);
+    if(validRect(proposed)&&openingHorizontal(proposed)===horizontal&&length>=limits.minLength&&length<=limits.maxLength&&
+       depth>=limits.minDepth&&depth<=limits.maxDepth&&openingFitsGap(proposed,gap)){
+      result[coordinate]=snap.value;guides.push(snap.guide);
+    }
+  }
+  ui.snapGuides=guides;return result;
+}
+function snapPlanRoomPoint(p,slot='room:point'){
+  const q=planSnap(p);
+  if(!ui.layers.smartSnap){ui.snapGuides=[];return q;}
+  const result={...q},guides=[];
+  for(const axis of ['x','y']){
+    const candidates=[];
+    for(const wall of planWallTargets())for(const feature of wallAxisFeatures(wall,axis))
+      candidates.push({value:feature.value,target:feature.value,kind:feature.kind});
+    const snap=nearestPlanValue(p[axis],q[axis],candidates,planSnapTolerance(),axis,`${slot}:${axis}`);
+    result[axis]=snap.value;if(snap.guide)guides.push(snap.guide);
+  }
+  ui.snapGuides=guides;return result;
+}
 function planRect(a,b,width=ui.wallWidth){
   const horizontal = Math.abs(b.x-a.x) >= Math.abs(b.y-a.y), half=Math.round(width/2);
   return horizontal ? [Math.min(a.x,b.x),a.y-half,Math.max(a.x,b.x),a.y+width-half]
@@ -1083,7 +1164,7 @@ function renderEditor(){
     ui.draftPoly.forEach(([x,y])=>s+=`<circle cx="${x}" cy="${y}" r="${4*k}" fill="#b5653a" pointer-events="none"/>`);
   }
   if (ui.drawStart && ui.drawEnd){
-    const [x0,y0,x1,y1]=planRect(ui.drawStart,ui.drawEnd), w=x1-x0,h=y1-y0;
+    const [x0,y0,x1,y1]=drag?.openingPreview || planRect(ui.drawStart,ui.drawEnd), w=x1-x0,h=y1-y0;
     s+=`<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="rgba(181,101,58,.35)" ${S} pointer-events="none"/>`;
     s+=`<text x="${(x0+x1)/2}" y="${(y0+y1)/2-10*k}" font-size="${12*k}" text-anchor="middle" fill="#b5653a" stroke="#fff" stroke-width="${3*k}" paint-order="stroke" pointer-events="none">${Math.max(w,h)} mm</text>`;
   }
@@ -1091,7 +1172,7 @@ function renderEditor(){
 }
 function finishRoom(){
   if(ui.draftPoly.length<3) return toast(tr('房间至少需要三个顶点','A room needs at least three points'));
-  const poly=ui.draftPoly.map(p=>[...p]); ui.draftPoly=[]; ui.draftCursor=null;
+  const poly=ui.draftPoly.map(p=>[...p]); ui.draftPoly=[]; ui.draftCursor=null;ui.roomSnapFeedback=null;ui.snapGuides=[];
   if(area(poly)<.1) return toast(tr('房间面积太小','Room area is too small'));
   const name=tr('新房间','New room');
   const id='room-'+Date.now().toString(36)+'-'+Math.floor(Math.random()*1000);
@@ -1114,8 +1195,8 @@ function roomPolygonIsSimple(poly,original){
   }
   return true;
 }
-function addOpening(kind,a,b){
-  const rect=planRect(a,b); if(Math.max(rect[2]-rect[0],rect[3]-rect[1])<300) return;
+function addOpening(kind,a,b,alignedRect){
+  const rect=alignedRect || planRect(a,b); if(Math.max(rect[2]-rect[0],rect[3]-rect[1])<300) return;
   const horizontal=rect[2]-rect[0]>=rect[3]-rect[1];
   mutate(()=>{
     if(kind==='window'){WINS.push([...rect,.9,1500]);ui.sel={kind:'opening',type:'win',index:WINS.length-1};}
@@ -1143,12 +1224,13 @@ function setOpeningCuts(type,index,cuts){if(type==='win')openingList(type)[index
 function subtractRect(w,r){
   const x0=Math.max(w[0],r[0]),y0=Math.max(w[1],r[1]),x1=Math.min(w[2],r[2]),y1=Math.min(w[3],r[3]);
   if(x1<=x0 || y1<=y0)return {pieces:[w],cut:null};
-  const piece=(a,b,c,d)=>c-a>=1&&d-b>=1?[a,b,c,d,...w.slice(4)]:null;
+  const tail=[w[4],wallHeight(w),wallIsHorizontal(w)?'h':'v'];
+  const piece=(a,b,c,d)=>c-a>=1&&d-b>=1?[a,b,c,d,...tail]:null;
   return {pieces:[piece(w[0],w[1],x0,w[3]),piece(x1,w[1],w[2],w[3]),
-    piece(x0,w[1],x1,y0),piece(x0,y1,x1,w[3])].filter(Boolean),cut:[x0,y0,x1,y1,...w.slice(4)]};
+    piece(x0,w[1],x1,y0),piece(x0,y1,x1,w[3])].filter(Boolean),cut:[x0,y0,x1,y1,...tail]};
 }
 function openingCutRectForWall(w,rect){
-  const alongWall=openingHorizontal(w)===openingHorizontal(rect);
+  const alongWall=wallIsHorizontal(w)===openingHorizontal(rect);
   if(!alongWall)return rect;
   const cross=openingHorizontal(rect)?1:0;
   const center=(rect[cross]+rect[cross+2])/2;
@@ -1193,8 +1275,9 @@ function inferOpeningCuts(rect){
     const vertical=overlapX>0 && (Math.abs(wall[3]-rect[1])<=2 || Math.abs(wall[1]-rect[3])<=2);
     const horizontal=overlapY>0 && (Math.abs(wall[2]-rect[0])<=2 || Math.abs(wall[0]-rect[2])<=2);
     if(!vertical&&!horizontal)return;
-    const cut=vertical?[Math.max(wall[0],rect[0]),rect[1],Math.min(wall[2],rect[2]),rect[3],...wall.slice(4)]
-      :[rect[0],Math.max(wall[1],rect[1]),rect[2],Math.min(wall[3],rect[3]),...wall.slice(4)];
+    const tail=[wall[4],wallHeight(wall),wallIsHorizontal(wall)?'h':'v'];
+    const cut=vertical?[Math.max(wall[0],rect[0]),rect[1],Math.min(wall[2],rect[2]),rect[3],...tail]
+      :[rect[0],Math.max(wall[1],rect[1]),rect[2],Math.min(wall[3],rect[3]),...tail];
     const key=cut.join(':');if(validRect(cut)&&!seen.has(key)){seen.add(key);inferred.push(cut);}
   });
   return inferred;
@@ -1218,7 +1301,7 @@ function openingDepth(rect){return openingHorizontal(rect)?rect[3]-rect[1]:rect[
 function openingLimits(type,rect){return {minLength:type==='win'?100:300,maxLength:50000,minDepth:50,maxDepth:1000};}
 function openingGap(rect){
   const horizontal=openingHorizontal(rect),lo=horizontal?0:1,hi=horizontal?2:3,cross0=horizontal?1:0,cross1=horizontal?3:2;
-  const match=(w)=>openingHorizontal(w)===horizontal &&
+  const match=(w)=>wallIsHorizontal(w)===horizontal &&
     Math.min(w[cross1],rect[cross1])-Math.max(w[cross0],rect[cross0])>=Math.min(50,(rect[cross1]-rect[cross0])/2);
   const find=(side)=>{
     let best=null,overlap=-Infinity;
@@ -1241,9 +1324,15 @@ function setOpeningRect(type,index,rect,gap){
   if(type==='win')openingList(type)[index]=[...rect,windowSill(item),windowHeight(item)];
   else{
     if(type==='door'){
-      item.h=[0,1].map(axis=>Math.round(rect[axis]+(item.h[axis]-old[axis])*(rect[axis+2]-rect[axis])/(old[axis+2]-old[axis])));
+      if(openingHorizontal(old)!==openingHorizontal(rect)){
+        const rotate=openingHorizontal(old)?v=>[-v[1],v[0]]:v=>[v[1],-v[0]];
+        item.c=rotate(item.c);item.o=rotate(item.o);
+        const axis=openingHorizontal(rect)?0:1,cross=1-axis;
+        item.h=[0,0];item.h[axis]=item.c[axis]<0?rect[axis+2]:rect[axis];item.h[cross]=(rect[cross]+rect[cross+2])/2;
+      }else item.h=[0,1].map(axis=>Math.round(rect[axis]+(item.h[axis]-old[axis])*(rect[axis+2]-rect[axis])/(old[axis+2]-old[axis])));
       item.len=openingLength(rect);
     }
+    if(type==='slide')item.v=!openingHorizontal(rect);
     item.rect=rect;
   }
   setOpeningCuts(type,index,cutOpeningFromWalls(rect));
@@ -1287,7 +1376,7 @@ function deletePlanSelection(){
     ui.sel=null;
   });
 }
-const wallIsHorizontal = w => w[2]-w[0]>=w[3]-w[1];
+const wallIsHorizontal = w => w[6]==='h'||w[6]!=='v'&&w[2]-w[0]>=w[3]-w[1];
 const wallLength = w => wallIsHorizontal(w) ? w[2]-w[0] : w[3]-w[1];
 const wallThickness = w => wallIsHorizontal(w) ? w[3]-w[1] : w[2]-w[0];
 const wallHeight = w => w[5] ?? (w[4]==='low' ? 1000 : 2800);
@@ -1337,7 +1426,7 @@ function openingFields(type,rect){
     ${type==='door'&&is3D()?`<label>${tr('门高','Door height')} (mm)<input id="doorHeight" type="number" min="100" max="6000" step="1" value="${doorHeight(item)}"></label>`:''}
     ${type==='win'?`<label>${tr('窗台高度','Sill height')} (mm)<input id="windowSill" type="number" min="0" max="6000" step="1" value="${Math.round(windowSill(item)*1000)}"></label><label>${tr('窗高','Window height')} (mm)<input id="windowHeight" type="number" min="100" max="6000" step="1" value="${windowHeight(item)}"></label>`:''}</div>
     ${type==='door'?`<div class="actions"><button class="btn" id="doorHinge">${tr('切换合页侧','Flip hinge side')}</button><button class="btn" id="doorSwing">${tr('切换开门方向','Flip swing direction')}</button></div>`:''}
-    <p class="muted">${tr('拖动中心沿墙移动；按住 Alt 拖动可自由移动到另一面墙。拖动边线或蓝色控制点改尺寸。移动时会修复旧洞口，并在新位置自动切墙。','Drag the center along its wall; hold Alt while dragging to move freely to another wall. Drag an edge or blue grip to resize. Moving repairs the old cut and cuts walls at the new position.')}</p>
+    <p class="muted">${tr('开启智能吸附后，拖动中心会自动贴合墙体中心线并匹配墙厚；可直接拖到另一面墙，按 Tab 切换候选。按住 Alt 可暂时自由移动。拖动边线或蓝色控制点改尺寸；旧洞口会自动修复。','With Smart Snap on, dragging the center locks to a wall centerline and matches its thickness. Drag to another wall directly, or press Tab to cycle targets. Hold Alt to move freely. Drag an edge or blue grip to resize; the old cut repairs automatically.')}</p>
     <div class="actions"><button class="btn danger" id="planDelete">${tr('删除门窗','Delete opening')}</button></div></section>`;
 }
 function bindOpeningFields(){
@@ -1398,8 +1487,8 @@ function planPanel(){
   if(s?.kind==='opening'){const rect=openingRect(s.type,s.index);if(rect)detail=openingFields(s.type,rect);}
   return `<section><h3>${tr('户型绘图','Floor plan editor')}</h3><div class="actions">${modes.map(([k,v,key])=>`<button class="btn ${ui.planTool===k?'on':''}" data-plan-tool="${k}" aria-pressed="${ui.planTool===k}" title="${tr('快捷键','Shortcut')}: ${key}">${v}<kbd>${key}</kbd></button>`).join('')}</div>
     <div class="form" style="margin-top:12px"><label>${tr('墙体类型','Wall type')}<select id="planWallType"><option value="n" ${ui.wallType==='n'?'selected':''}>${tr('普通隔墙','Partition')}</option><option value="e" ${ui.wallType==='e'?'selected':''}>${tr('外墙','Exterior')}</option><option value="b" ${ui.wallType==='b'?'selected':''}>${tr('承重墙','Bearing')}</option><option value="low" ${ui.wallType==='low'?'selected':''}>${tr('矮墙','Low wall')}</option></select></label><label>${tr('墙厚','Wall thickness')} (mm)<input id="planWallWidth" type="number" min="50" max="1000" step="1" value="${ui.wallWidth}"></label></div></section>${detail}<section>
-    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动；开启「智能吸附」后墙边和中心线会沿蓝色参考线对齐。F3 开关吸附，拖动时按 Tab 切换候选、Shift+Tab 反向切换。画房间：逐点点击，双击或 Enter 完成。M 选择墙体；拖动边线或蓝色中点单独调整长或宽，角点沿起始方向锁定单轴，精度 1 mm。按住空格拖动画布。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings; Smart snap aligns wall edges and centerlines along blue guides. F3 toggles snapping; press Tab while dragging to cycle candidates, or Shift+Tab to cycle backwards. Click room corners, then double-click or Enter. M selects walls; drag an edge or blue midpoint to adjust one dimension, or a corner grip to lock to the initial axis. Precision: 1 mm. Hold Space to pan.')}</p>
-    <p class="muted">${tr('直接拖动已有门窗和墙体中心可移动；画房间时拖动已有房间中心也可移动。若要从已有图形上开始新绘制，按住 Shift；按住 Alt 拖动门窗可移到另一面墙，画门窗时按住 Alt 也可拖动墙体。','Drag an existing opening or wall to move it; drag a room near its center while drawing. Hold Shift to start a new shape over an existing one. Hold Alt to move an opening to another wall, or to move a wall while using an opening tool.')}</p>
+    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动；智能吸附会把门窗贴到墙体中心线并匹配墙厚，房间顶点也可对齐墙边。吸附时显示蓝色参考线并播放提示音。F3 开关吸附，拖动时按 Tab 切换候选、Shift+Tab 反向切换。画房间：逐点点击，双击或 Enter 完成。按住空格拖动画布。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings. Smart Snap fits openings to a wall centerline and thickness, and aligns room vertices to wall edges. A blue guide and short sound confirm a lock. F3 toggles snapping; Tab cycles candidates and Shift+Tab reverses. Click room corners, then double-click or Enter. Hold Space to pan.')}</p>
+    <p class="muted">${tr('直接拖动已有门窗、墙体和房间中心可移动；门窗能直接吸附到另一面墙，按住 Alt 可暂时关闭贴墙吸附。若要在已有图形上开始新绘制，按住 Shift；画门窗时按住 Alt 也可拖动墙体。','Drag an existing opening, wall, or room center to move it. Openings snap directly to another wall; hold Alt to temporarily bypass wall snapping. Hold Shift to start a new shape over an existing one; Alt can also move a wall while using an opening tool.')}</p>
     <div class="actions"><button class="btn danger" id="planClear">${tr('清空户型，重新绘制','Clear plan and start over')}</button></div></section>`;
 }
 function bindPlanPanel(){
@@ -1660,7 +1749,7 @@ function toggleWall(id){
 
 function setTool(t){
   ui.tool = t; ui.mA = null; ui.mCur = null;
-  ui.draftPoly=[]; ui.draftCursor=null; ui.drawStart=null; ui.drawEnd=null; ui.snapGuides=[]; ui.sel=null;
+  ui.draftPoly=[]; ui.draftCursor=null; ui.drawStart=null; ui.drawEnd=null; ui.snapGuides=[]; ui.roomSnapFeedback=null; ui.sel=null;
   svg.setAttribute('class', 'tool-' + t);
   document.querySelectorAll('#tools .btn').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   syncModeHint();
@@ -1669,7 +1758,7 @@ function setTool(t){
 function setPlanTool(kind){
   if(is3D()) return;
   if(ui.tool!=='plan') setTool('plan');
-  ui.planTool=kind; ui.draftPoly=[]; ui.draftCursor=null; ui.drawStart=ui.drawEnd=null; ui.snapGuides=[]; ui.sel=null;
+  ui.planTool=kind; ui.draftPoly=[]; ui.draftCursor=null; ui.drawStart=ui.drawEnd=null; ui.snapGuides=[]; ui.roomSnapFeedback=null; ui.sel=null;
   renderAll();
 }
 function syncModeHint(){
@@ -1791,7 +1880,7 @@ function endDrag(cancel){
       const a=ui.drawStart,b=ui.drawEnd;ui.drawStart=ui.drawEnd=null;
       if(a&&b&&Math.hypot(a.x-b.x,a.y-b.y)>=100){
         if(ui.planTool==='wall') mutate(()=>{WALLS.push([...planRect(a,b),ui.wallType]);ui.sel={kind:'wall',index:WALLS.length-1};});
-        else addOpening(ui.planTool,a,b);
+        else addOpening(ui.planTool,a,b,d.openingPreview);
       }else{renderEditor();renderPanel();}
     }else if(d.moved){syncPlan();commit(d.before);renderAll();}
     return;
@@ -1871,7 +1960,9 @@ svg.addEventListener('pointerdown', e => {
       renderPanel();renderSel();renderEditor();
     }
     else if(ui.planTool==='room'){
-      if(!ui.draftPoly.length || Math.hypot(q.x-ui.draftPoly.at(-1)[0],q.y-ui.draftPoly.at(-1)[1])>=50)ui.draftPoly.push([q.x,q.y]);
+      const roomPoint=snapPlanRoomPoint(p);
+      if(!ui.draftPoly.length || Math.hypot(roomPoint.x-ui.draftPoly.at(-1)[0],roomPoint.y-ui.draftPoly.at(-1)[1])>=50)ui.draftPoly.push([roomPoint.x,roomPoint.y]);
+      trackSnapSound(ui.roomSnapFeedback ||= {moved:true},ui.snapGuides.map(guide=>guide.id).sort().join('|'));
       renderEditor();return;
     }
     else if(ui.planTool!=='select'){
@@ -1911,6 +2002,7 @@ function updatePlanDrag(p,clientX,clientY){
   if(Math.hypot(clientX-drag.sx,clientY-drag.sy)>=TAP)drag.moved=true;
   if(drag.kind==='plan-draw'){
     if(ui.planTool==='wall'){
+      drag.openingPreview=null;
       const horizontal=Math.abs(p.x-drag.start.x)>=Math.abs(p.y-drag.start.y);
       ui.drawStart=snapPlanDrawPoint(drag.start,horizontal,'draw-start');
       ui.drawEnd=snapPlanDrawPoint(p,horizontal,'draw-end');
@@ -1921,6 +2013,17 @@ function updatePlanDrag(p,clientX,clientY){
       if(useEnd)ui.drawStart[crossAxis]=ui.drawEnd[crossAxis];
       ui.snapGuides=[...ui.drawStart.guides.filter(g=>g.axis!==crossAxis),
         ...ui.drawEnd.guides.filter(g=>g.axis!==crossAxis),useEnd?endGuide:startGuide].filter(Boolean);
+    }else if(['door','window','slide'].includes(ui.planTool)){
+      const host=openingWallHost(drag.start,'draw-end:host')||openingWallHost(p,'draw-end:host');
+      if(host){
+        const wall=host.wall,horizontal=wallIsHorizontal(wall),axis=horizontal?'x':'y',cross=(wall[horizontal?1:0]+wall[horizontal?3:2])/2;
+        const start=openingAlongSnap(drag.start[axis],wall,'draw-start:along');
+        const end=openingAlongSnap(p[axis],wall,'draw-end:along');
+        ui.drawStart=horizontal?{x:start.value,y:cross}:{x:cross,y:start.value};
+        ui.drawEnd=horizontal?{x:end.value,y:cross}:{x:cross,y:end.value};
+        drag.openingPreview=openingDraftRect(ui.drawStart,ui.drawEnd,wall);
+        ui.snapGuides=[host.guide,start.guide,end.guide].filter(Boolean);
+      }else{ui.drawStart=planSnap(drag.start);ui.drawEnd=q;drag.openingPreview=null;ui.snapGuides=[];}
     }else ui.drawEnd=q;
     renderEditor();
     const output=$('#wallDraftLength');if(output)output.textContent=Math.max(Math.abs(ui.drawEnd.x-ui.drawStart.x),Math.abs(ui.drawEnd.y-ui.drawStart.y));
@@ -1935,9 +2038,12 @@ function updatePlanDrag(p,clientX,clientY){
   }
   if(drag.kind==='plan-move-opening' || drag.kind==='plan-resize-opening'){
     const rect=drag.kind==='plan-move-opening'
-      ? moveOpeningRect(drag.initial,q.x-drag.origin.x,q.y-drag.origin.y,drag.gap,drag.free)
+      ? moveOpeningRect(drag.initial,q.x-drag.origin.x,q.y-drag.origin.y,drag.gap,true)
       : resizeOpeningRect(drag.initial,{x:q.x-drag.offset.x,y:q.y-drag.offset.y},drag.edges,drag.type,drag.gap);
-    setOpeningRect(drag.type,drag.index,rect,drag.gap);
+    const aligned=drag.kind==='plan-move-opening'&&!drag.free?snapOpeningMoveRect(rect)
+      :drag.kind==='plan-resize-opening'?snapOpeningResizeRect(rect,drag.edges,drag.type,drag.gap):rect;
+    if(drag.free)ui.snapGuides=[];
+    setOpeningRect(drag.type,drag.index,aligned,drag.gap);
     renderWalls();renderRooms();renderOpenings();renderEditor();updateOpeningDimensionFields();return;
   }
   if(drag.kind==='plan-move-room'){
@@ -1951,7 +2057,16 @@ function updatePlanDrag(p,clientX,clientY){
     if(!length)return;
     const nx=-vy/length,ny=vx/length,delta=Math.round((q.x-drag.origin.x)*nx+(q.y-drag.origin.y)*ny);
     const poly=drag.initialPoly.map(pt=>[...pt]);poly[i]=[Math.round(a[0]+delta*nx),Math.round(a[1]+delta*ny)];poly[j]=[Math.round(b[0]+delta*nx),Math.round(b[1]+delta*ny)];
+    ui.snapGuides=[];
+    const axis=vy===0?'y':vx===0?'x':null;
+    if(axis&&ui.layers.smartSnap){
+      const k=axis==='x'?0:1,candidates=[];
+      for(const wall of planWallTargets())for(const feature of wallAxisFeatures(wall,axis))candidates.push({value:feature.value,target:feature.value,kind:feature.kind});
+      const snapped=nearestPlanValue(poly[i][k],poly[i][k],candidates,planSnapTolerance(),axis,'room:edge');
+      if(snapped.guide){const shift=snapped.value-poly[i][k];poly[i][k]+=shift;poly[j][k]+=shift;ui.snapGuides=[snapped.guide];}
+    }
     if(roomPolygonIsSimple(poly,drag.initialPoly)){r.poly=poly;const bounds=bbox(poly);r.at=[(bounds[0]+bounds[2])/2,(bounds[1]+bounds[3])/2];renderRooms();renderLabels();renderSel();renderEditor();updateRoomDimensionFields();}
+    else ui.snapGuides=[];
     return;
   }
   if(drag.kind==='plan-resize-wall' || drag.kind==='plan-resize-wall-edge'){
@@ -1968,7 +2083,7 @@ function updatePlanDrag(p,clientX,clientY){
     renderWalls();renderEditor();updateWallDimensionFields();return;
   }
   if(drag.kind==='plan-room-vertex'){
-    const r=ROOMS.find(r=>r.id===drag.id);r.poly[drag.vertex]=[q.x,q.y];
+    const point=snapPlanRoomPoint(p,'room:vertex'),r=ROOMS.find(r=>r.id===drag.id);r.poly[drag.vertex]=[point.x,point.y];
     const [x0,y0,x1,y1]=bbox(r.poly);r.at=[(x0+x1)/2,(y0+y1)/2];
     renderRooms();renderLabels();renderSel();renderEditor();
   }
@@ -2008,7 +2123,7 @@ svg.addEventListener('pointermove', e => {
   }
   const p = toMM(e);
   $('#cx').textContent = Math.round(p.x) + ' mm'; $('#cy').textContent = Math.round(p.y) + ' mm';
-  if(ui.tool==='plan' && !drag){if(ui.planTool==='room' && ui.draftPoly.length){ui.draftCursor=planSnap(p);renderEditor();}return;}
+  if(ui.tool==='plan' && !drag){if(ui.planTool==='room' && ui.draftPoly.length){ui.draftCursor=snapPlanRoomPoint(p);trackSnapSound(ui.roomSnapFeedback ||= {moved:true},ui.snapGuides.map(guide=>guide.id).sort().join('|'));renderEditor();}return;}
   if (!drag){
     const room = e.target.closest && e.target.closest('[data-room]');
     $('#hover').innerHTML = room ? `<b>${esc(state.rooms[room.dataset.room].name)}</b> ${fmt(area(ROOMS.find(r=>r.id===room.dataset.room).poly))} m²` : '';
@@ -2063,7 +2178,7 @@ svg.addEventListener('wheel', e => {
   zoomAt(view.s*Math.exp(-e.deltaY*(e.ctrlKey ? .01 : .0015)), e.clientX-r.left, e.clientY-r.top);
 }, {passive:false});
 svg.addEventListener('dblclick', e => { if(ui.tool==='plan' && ui.planTool==='room' && ui.draftPoly.length>=3){
-  const q=planSnap(toMM(e));
+  const q=snapPlanRoomPoint(toMM(e));
   if(ui.draftPoly.length && Math.hypot(q.x-ui.draftPoly.at(-1)[0],q.y-ui.draftPoly.at(-1)[1])>=50)ui.draftPoly.push([q.x,q.y]);
   finishRoom();return;
 } if (ui.tool==='select' && e.target.closest('[data-fid]')) rotateSel(90); });
