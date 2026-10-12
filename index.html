@@ -283,7 +283,7 @@ main.drawer-panel #fab{opacity:0;visibility:hidden}
       <button class="btn chip on" data-layer="furn" data-en="Furniture">家具</button>
       <button class="btn chip" data-layer="grid" data-en="Grid">网格</button>
       <button class="btn chip" data-layer="bearing" data-en="Bearing walls">承重墙</button>
-      <button class="btn chip on" data-layer="wallSnap" title="拖动家具时贴墙吸附" data-en-title="Snap furniture to walls while dragging" data-en="Wall snap">贴墙吸附</button>
+      <button class="btn chip on" data-layer="smartSnap" title="墙体绘制与拖动时对齐边缘、端点和中心线；家具贴墙" data-en-title="Align wall edges, endpoints, and centerlines while drawing or dragging; snap furniture to walls" data-en="Smart snap">智能吸附</button>
     </div>
     <div class="grp only3d">
       <button class="btn chip on" data-cut="2.8" data-en="Full walls">全高墙</button>
@@ -604,8 +604,8 @@ const svg = $('#plan');
 
 /* ======================= 状态 / 历史 / 存储 ======================= */
 let state = load() || defaultState();
-const ui = {tool:'select', planTool:'select', wallType:'n', wallWidth:240, sel:null, mA:null, mCur:null, draftPoly:[], draftCursor:null,
-  layers:{dims:true, labels:true, furn:true, grid:false, bearing:false, wallSnap:true}};
+const ui = {tool:'select', planTool:'select', wallType:'n', wallWidth:240, sel:null, mA:null, mCur:null, draftPoly:[], draftCursor:null, snapGuides:[],
+  layers:{dims:true, labels:true, furn:true, grid:false, bearing:false, smartSnap:true}};
 let view = {x0:0, y0:0, s:.06};
 const undoStack = [], redoStack = [];
 
@@ -917,48 +917,66 @@ const planSnapTolerance = () => Math.min(350,14/view.s);
 function planWallTargets(exclude=-1){
   return WALLS.filter((w,i)=>i!==exclude && !state.demolished.includes('w'+i));
 }
-function nearestPlanValue(raw, fallback, candidates, tol){
-  let result=fallback, distance=tol;
+const wallAxisFeatures=(w,axis)=>{
+  const a=axis==='x'?0:1,b=axis==='x'?2:3;
+  return [{value:w[a],kind:'edge'},{value:w[b],kind:'edge'},
+    {value:(w[a]+w[b])/2,kind:axis===(wallIsHorizontal(w)?'y':'x')?'center':'midpoint'}];
+};
+function nearestPlanValue(raw, fallback, candidates, tol, axis){
+  let best=null,distance=tol;
   for(const candidate of candidates){
-    const d=Math.abs(candidate-raw);
-    if(d<distance){distance=d;result=candidate;}
+    const d=Math.abs(candidate.value-raw);
+    if(d<distance || d===distance && best && candidate.kind==='center' && best.kind!=='center'){
+      distance=d;best=candidate;
+    }
   }
-  return Math.round(result);
+  return {value:best?best.value:fallback,guide:best?{axis,value:best.target,kind:best.kind}:null};
 }
 function snapPlanDrawPoint(p,horizontal){
+  const q=planSnap(p);
+  if(!ui.layers.smartSnap)return {...q,guides:[]};
   const tol=planSnapTolerance(), half=ui.wallWidth/2;
   const xs=[],ys=[];
   for(const w of planWallTargets()){
-    if(p.y>=w[1]-tol-half && p.y<=w[3]+tol+half){
-      if(horizontal)xs.push(w[0],w[2]);
-      else xs.push((w[0]+w[2])/2,w[0]-half,w[0]+half,w[2]-half,w[2]+half);
+    for(const f of wallAxisFeatures(w,'x')){
+      if(horizontal)xs.push({value:f.value,target:f.value,kind:f.kind});
+      else if(f.kind==='center')xs.push({value:f.value,target:f.value,kind:f.kind});
+      else for(const offset of [-half,half])xs.push({value:f.value+offset,target:f.value,kind:f.kind});
     }
-    if(p.x>=w[0]-tol-half && p.x<=w[2]+tol+half){
-      if(horizontal)ys.push((w[1]+w[3])/2,w[1]-half,w[1]+half,w[3]-half,w[3]+half);
-      else ys.push(w[1],w[3]);
+    for(const f of wallAxisFeatures(w,'y')){
+      if(!horizontal)ys.push({value:f.value,target:f.value,kind:f.kind});
+      else if(f.kind==='center')ys.push({value:f.value,target:f.value,kind:f.kind});
+      else for(const offset of [-half,half])ys.push({value:f.value+offset,target:f.value,kind:f.kind});
     }
   }
-  return {x:nearestPlanValue(p.x,planSnap(p).x,xs,tol),y:nearestPlanValue(p.y,planSnap(p).y,ys,tol)};
+  const x=nearestPlanValue(p.x,q.x,xs,tol,'x'),y=nearestPlanValue(p.y,q.y,ys,tol,'y');
+  return {x:x.value,y:y.value,guides:[x.guide,y.guide].filter(Boolean)};
 }
 function snapPlanWallMove(rect,index){
+  if(!ui.layers.smartSnap){ui.snapGuides=[];return rect;}
   const tol=planSnapTolerance(), xs=[],ys=[];
   for(const w of planWallTargets(index)){
-    if(rect[3]>=w[1]-tol && rect[1]<=w[3]+tol)
-      for(const edge of [rect[0],rect[2]])for(const target of [w[0],w[2]])xs.push(target-edge);
-    if(rect[2]>=w[0]-tol && rect[0]<=w[2]+tol)
-      for(const edge of [rect[1],rect[3]])for(const target of [w[1],w[3]])ys.push(target-edge);
+    for(const axis of ['x','y']){
+      const candidates=axis==='x'?xs:ys;
+      for(const source of wallAxisFeatures(rect,axis))for(const target of wallAxisFeatures(w,axis)){
+        if(source.kind===target.kind)
+          candidates.push({value:target.value-source.value,target:target.value,kind:target.kind});
+      }
+    }
   }
-  const dx=nearestPlanValue(0,0,xs,tol),dy=nearestPlanValue(0,0,ys,tol);
-  return [rect[0]+dx,rect[1]+dy,rect[2]+dx,rect[3]+dy];
+  const dx=nearestPlanValue(0,0,xs,tol,'x'),dy=nearestPlanValue(0,0,ys,tol,'y');
+  ui.snapGuides=[dx.guide,dy.guide].filter(Boolean);
+  return [rect[0]+dx.value,rect[1]+dy.value,rect[2]+dx.value,rect[3]+dy.value];
 }
-function snapPlanWallCorner(p,index){
-  const tol=planSnapTolerance(), xs=[],ys=[];
-  for(const w of planWallTargets(index)){
-    if(p.y>=w[1]-tol && p.y<=w[3]+tol)xs.push(w[0],w[2]);
-    if(p.x>=w[0]-tol && p.x<=w[2]+tol)ys.push(w[1],w[3]);
-  }
+function snapPlanWallEdge(p,index,edge){
   const q=planSnap(p);
-  return {x:nearestPlanValue(p.x,q.x,xs,tol),y:nearestPlanValue(p.y,q.y,ys,tol)};
+  if(!ui.layers.smartSnap){ui.snapGuides=[];return q;}
+  const axis=edge===0||edge===2?'y':'x',candidates=[];
+  for(const w of planWallTargets(index))for(const f of wallAxisFeatures(w,axis))
+    candidates.push({value:f.value,target:f.value,kind:f.kind});
+  const snapped=nearestPlanValue(p[axis],q[axis],candidates,planSnapTolerance(),axis);
+  ui.snapGuides=snapped.guide?[snapped.guide]:[];
+  return {...q,[axis]:snapped.value};
 }
 function planRect(a,b,width=ui.wallWidth){
   const horizontal = Math.abs(b.x-a.x) >= Math.abs(b.y-a.y), half=Math.round(width/2);
@@ -983,6 +1001,16 @@ function renderEditor(){
   const S='stroke="#b5653a" stroke-width="2" vector-effect="non-scaling-stroke"';
   const marker=(name,id,x,y)=>`<rect ${name}="${id}" x="${x-hit/2}" y="${y-hit/2}" width="${hit}" height="${hit}" fill="transparent"/><rect x="${x-grip/2}" y="${y-grip/2}" width="${grip}" height="${grip}" fill="#fff" stroke="#2b73c5" stroke-width="1.3" vector-effect="non-scaling-stroke" pointer-events="none"/>`;
   let s='';
+  if(ui.layers.smartSnap)for(const guide of ui.snapGuides){
+    const vertical=guide.axis==='x', x=guide.value, y=guide.value;
+    const label=guide.kind==='center'?tr('中心线','Centerline'):guide.kind==='midpoint'?tr('中点','Midpoint'):tr('边缘','Edge');
+    s+=vertical
+      ? `<line data-snap-guide="${guide.kind}" x1="${x}" y1="${view.y0}" x2="${x}" y2="${view.y0+svg.clientHeight/view.s}" stroke="#2b73c5" stroke-width="1" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" pointer-events="none"/>`
+      : `<line data-snap-guide="${guide.kind}" x1="${view.x0}" y1="${y}" x2="${view.x0+svg.clientWidth/view.s}" y2="${y}" stroke="#2b73c5" stroke-width="1" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" pointer-events="none"/>`;
+    s+=vertical
+      ? `<text x="${x+6*k}" y="${view.y0+18*k}" font-size="${11*k}" fill="#2b73c5" stroke="#fff" stroke-width="${3*k}" paint-order="stroke" pointer-events="none">${label}</text>`
+      : `<text x="${view.x0+8*k}" y="${y-6*k}" font-size="${11*k}" fill="#2b73c5" stroke="#fff" stroke-width="${3*k}" paint-order="stroke" pointer-events="none">${label}</text>`;
+  }
   if (ui.sel?.kind==='wall' && WALLS[ui.sel.index]){
     const [x0,y0,x1,y1]=WALLS[ui.sel.index];
     s+=`<rect x="${x0}" y="${y0}" width="${x1-x0}" height="${y1-y0}" fill="rgba(181,101,58,.15)" ${S} pointer-events="none"/>`;
@@ -1109,7 +1137,7 @@ function planPanel(){
   if(s?.kind==='opening') detail=`<section><h3>${tr('所选门窗','Selected opening')}</h3><div class="actions"><button class="btn danger" id="planDelete">${tr('删除门窗','Delete opening')}</button></div></section>`;
   return `<section><h3>${tr('户型绘图','Floor plan editor')}</h3><div class="actions">${modes.map(([k,v,key])=>`<button class="btn ${ui.planTool===k?'on':''}" data-plan-tool="${k}" aria-pressed="${ui.planTool===k}" title="${tr('快捷键','Shortcut')}: ${key}">${v}<kbd>${key}</kbd></button>`).join('')}</div>
     <div class="form" style="margin-top:12px"><label>${tr('墙体类型','Wall type')}<select id="planWallType"><option value="n" ${ui.wallType==='n'?'selected':''}>${tr('普通隔墙','Partition')}</option><option value="e" ${ui.wallType==='e'?'selected':''}>${tr('外墙','Exterior')}</option><option value="b" ${ui.wallType==='b'?'selected':''}>${tr('承重墙','Bearing')}</option><option value="low" ${ui.wallType==='low'?'selected':''}>${tr('矮墙','Low wall')}</option></select></label><label>${tr('墙厚','Wall thickness')} (mm)<input id="planWallWidth" type="number" min="50" max="1000" step="1" value="${ui.wallWidth}"></label></div>
-    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动，墙角会吸附到已有墙边。画房间：逐点点击，双击或 Enter 完成。M 选择墙体；拖动边线或蓝色中点单独调整长或宽，角点沿起始方向锁定单轴，精度 1 mm。按住空格拖动画布。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings; wall corners snap to existing edges. Click room corners, then double-click or Enter. M selects walls; drag an edge or blue midpoint to adjust one dimension, or a corner grip to lock to the initial axis. Precision: 1 mm. Hold Space to pan.')}</p>
+    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动；开启「智能吸附」后墙边和中心线会沿蓝色参考线对齐。画房间：逐点点击，双击或 Enter 完成。M 选择墙体；拖动边线或蓝色中点单独调整长或宽，角点沿起始方向锁定单轴，精度 1 mm。按住空格拖动画布。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings; Smart snap aligns wall edges and centerlines along blue guides. Click room corners, then double-click or Enter. M selects walls; drag an edge or blue midpoint to adjust one dimension, or a corner grip to lock to the initial axis. Precision: 1 mm. Hold Space to pan.')}</p>
     <div class="actions"><button class="btn danger" id="planClear">${tr('清空户型，重新绘制','Clear plan and start over')}</button></div></section>${detail}`;
 }
 function bindPlanPanel(){
@@ -1300,7 +1328,7 @@ function furnPanel(f){
       <button class="btn" id="aTop">${tr('置于顶层','Bring to front')}</button><button class="btn" id="aBot">${tr('置于底层','Send to back')}</button>
       <button class="btn danger" id="aDel">${tr('删除','Delete')}</button><button class="btn" id="back">${tr('← 返回','← Back')}</button>
     </div></section>
-  <section class="muted" style="font-size:12px">${tr('拖动家具移动；拖动上方圆点旋转；拖动右下角方块调整尺寸。开启「贴墙吸附」后靠近墙面会自动贴齐。', 'Drag to move; drag the top dot to rotate; drag the bottom-right square to resize. With "Wall snap" on, items snap flush to nearby walls.')}</section>`;
+  <section class="muted" style="font-size:12px">${tr('拖动家具移动；拖动上方圆点旋转；拖动右下角方块调整尺寸。开启「智能吸附」后靠近墙面会自动贴齐。', 'Drag to move; drag the top dot to rotate; drag the bottom-right square to resize. With "Smart snap" on, items snap flush to nearby walls.')}</section>`;
 }
 function bindFurnPanel(f){
   const upd = (fn) => mutate(() => { const g = getF(f.id); if (g) fn(g); });
@@ -1362,7 +1390,7 @@ function toggleWall(id){
 
 function setTool(t){
   ui.tool = t; ui.mA = null; ui.mCur = null;
-  ui.draftPoly=[]; ui.draftCursor=null; ui.drawStart=null; ui.drawEnd=null; ui.sel=null;
+  ui.draftPoly=[]; ui.draftCursor=null; ui.drawStart=null; ui.drawEnd=null; ui.snapGuides=[]; ui.sel=null;
   svg.setAttribute('class', 'tool-' + t);
   document.querySelectorAll('#tools .btn').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   syncModeHint();
@@ -1371,7 +1399,7 @@ function setTool(t){
 function setPlanTool(kind){
   if(is3D()) return;
   if(ui.tool!=='plan') setTool('plan');
-  ui.planTool=kind; ui.draftPoly=[]; ui.draftCursor=null; ui.drawStart=ui.drawEnd=null; ui.sel=null;
+  ui.planTool=kind; ui.draftPoly=[]; ui.draftCursor=null; ui.drawStart=ui.drawEnd=null; ui.snapGuides=[]; ui.sel=null;
   renderAll();
 }
 function syncModeHint(){
@@ -1417,7 +1445,7 @@ function toMM(e){
 const grid = () => 10;
 function snapMove(f, cx, cy){
   let nx = Math.round(cx/grid())*grid(), ny = Math.round(cy/grid())*grid();
-  if (!ui.layers.wallSnap) return [nx, ny];
+  if (!ui.layers.smartSnap) return [nx, ny];
   const {hw, hh} = aabb(f), tol = 10/view.s;
   let bx = tol, by = tol;
   for (const r of snapRects()){
@@ -1447,7 +1475,7 @@ function pinchInfo(){
 }
 // 结束当前拖动：移动过的家具记入撤销栈
 function endDrag(cancel){
-  const d = drag; drag = null; svg.classList.remove('panning');
+  const d = drag; drag = null; ui.snapGuides=[]; svg.classList.remove('panning');
   if (!d) return;
   if (d.kind.startsWith('plan-')){
     if(cancel){ if(d.before){state=JSON.parse(d.before);syncPlan();} ui.drawStart=ui.drawEnd=null;renderAll();return; }
@@ -1560,6 +1588,12 @@ svg.addEventListener('pointermove', e => {
         const horizontal=Math.abs(p.x-drag.start.x)>=Math.abs(p.y-drag.start.y);
         ui.drawStart=snapPlanDrawPoint(drag.start,horizontal);
         ui.drawEnd=snapPlanDrawPoint(p,horizontal);
+        const crossAxis=horizontal?'y':'x';
+        const startGuide=ui.drawStart.guides.find(g=>g.axis===crossAxis);
+        const endGuide=ui.drawEnd.guides.find(g=>g.axis===crossAxis);
+        if(!startGuide && endGuide)ui.drawStart[crossAxis]=ui.drawEnd[crossAxis];
+        ui.snapGuides=[...ui.drawStart.guides.filter(g=>g.axis!==crossAxis),
+          ...ui.drawEnd.guides.filter(g=>g.axis!==crossAxis),startGuide||endGuide].filter(Boolean);
       }else ui.drawEnd=q;
       renderEditor();
       const output=$('#wallDraftLength');if(output)output.textContent=Math.max(Math.abs(ui.drawEnd.x-ui.drawStart.x),Math.abs(ui.drawEnd.y-ui.drawStart.y));
@@ -1573,13 +1607,16 @@ svg.addEventListener('pointermove', e => {
       renderWalls();renderEditor();updateWallDimensionFields();return;
     }
     if(drag.kind==='plan-resize-wall' || drag.kind==='plan-resize-wall-edge'){
-      const w=WALLS[drag.index], point=snapPlanWallCorner(p,drag.index);
+      const w=WALLS[drag.index];
       if(drag.kind==='plan-resize-wall' && drag.axis===undefined)
         drag.axis=Math.abs(e.clientX-drag.sx)>=Math.abs(e.clientY-drag.sy)?'x':'y';
       const c=drag.corner;
       const edge=drag.kind==='plan-resize-wall-edge' ? drag.edge
         : drag.axis==='x' ? (c===0||c===3?3:1) : (c===0||c===1?0:2);
+      const point=snapPlanWallEdge(p,drag.index,edge);
       resizePlanWallEdge(w,edge,point);
+      const actual=edge===0?w[1]:edge===1?w[2]:edge===2?w[3]:w[0];
+      if(ui.snapGuides.length && Math.abs(actual-ui.snapGuides[0].value)>.001)ui.snapGuides=[];
       renderWalls();renderEditor();updateWallDimensionFields();return;
     }
     if(drag.kind==='plan-room-vertex'){
@@ -1819,7 +1856,7 @@ const is3D = () => viewMode === '3d';
 const TIPS = () => COARSE
   ? {'2d':tr('点或拖动家具库添加 · 单指拖动平移 · 双指缩放 · 选中家具后底部工具条可旋转 / 复制 / 删除', 'Tap or drag from the library · 1 finger pans · pinch zooms · bottom bar rotates / duplicates / deletes'),
      '3d':tr('点墙体修改尺寸和高度 · 单指旋转 · 双指缩放 / 平移 · 点门开关', 'Tap a wall to edit its size and height · 1 finger orbits · 2 fingers zoom / pan · tap doors to open')}
-  : {'2d':tr('按住空格拖动画布 · 墙角吸附已有墙边 · 滚轮缩放 · T 切换 3D', 'Hold Space to pan · wall corners snap to edges · scroll to zoom · T for 3D'),
+  : {'2d':tr('按住空格拖动画布 · 智能吸附对齐墙边和中心线 · 滚轮缩放 · T 切换 3D', 'Hold Space to pan · Smart snap aligns wall edges and centerlines · scroll to zoom · T for 3D'),
      '3d':tr('点击墙体修改高度 · 右侧修改会立即生效 · T 返回 2D', 'Click a wall to edit its height · panel changes apply instantly · T for 2D')};
 async function setView(m){
   if (m === viewMode || switching) return;
@@ -1848,7 +1885,8 @@ document.querySelectorAll('#tools .btn').forEach(b => b.onclick = () => setTool(
 document.querySelectorAll('#layers .btn').forEach(b => b.onclick = () => {
   const k = b.dataset.layer; ui.layers[k] = !ui.layers[k]; b.classList.toggle('on', ui.layers[k]);
   if (k === 'dims') $('#gDims').setAttribute('display', ui.layers.dims ? 'inline' : 'none');
-  else if (k !== 'wallSnap') renderAll();
+  else if (k === 'smartSnap'){ui.snapGuides=[];renderEditor();}
+  else renderAll();
 });
 $('#zoomIn').onclick = () => zoomCenter(1.25);
 $('#zoomOut').onclick = () => zoomCenter(.8);
@@ -1996,7 +2034,7 @@ function init(){
   });
   cv.addEventListener('pointercancel', e => { if (look?.id === e.pointerId) look = null; });
 
-  // 按住已选中的家具拖动：沿地面摆放（与 2D 共用网格和贴墙吸附）。
+  // 按住已选中的家具拖动：沿地面摆放（与 2D 共用网格和智能吸附）。
   // 在父元素上用捕获阶段监听，赶在 OrbitControls 之前关掉它，避免同时旋转镜头
   let fdrag = null;
   host.addEventListener('pointerdown', e => {
