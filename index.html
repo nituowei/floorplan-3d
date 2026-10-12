@@ -283,7 +283,7 @@ main.drawer-panel #fab{opacity:0;visibility:hidden}
       <button class="btn chip on" data-layer="furn" data-en="Furniture">家具</button>
       <button class="btn chip" data-layer="grid" data-en="Grid">网格</button>
       <button class="btn chip" data-layer="bearing" data-en="Bearing walls">承重墙</button>
-      <button class="btn chip on" data-layer="smartSnap" title="墙体绘制与拖动时对齐边缘、端点和中心线；家具贴墙" data-en-title="Align wall edges, endpoints, and centerlines while drawing or dragging; snap furniture to walls" data-en="Smart snap">智能吸附</button>
+      <button class="btn chip on" data-layer="smartSnap" aria-pressed="true" title="F3 开关；拖动时按 Tab 切换边缘、端点和中心线" data-en-title="F3 toggles; press Tab while dragging to cycle wall edges, endpoints, and centerlines" data-en="Smart snap">智能吸附</button>
     </div>
     <div class="grp only3d">
       <button class="btn chip on" data-cut="2.8" data-en="Full walls">全高墙</button>
@@ -922,17 +922,22 @@ const wallAxisFeatures=(w,axis)=>{
   return [{value:w[a],kind:'edge'},{value:w[b],kind:'edge'},
     {value:(w[a]+w[b])/2,kind:axis===(wallIsHorizontal(w)?'y':'x')?'center':'midpoint'}];
 };
-function nearestPlanValue(raw, fallback, candidates, tol, axis){
-  let best=null,distance=tol;
+function nearestPlanValue(raw, fallback, candidates, tol, axis, key){
+  const byValue=new Map();
   for(const candidate of candidates){
     const d=Math.abs(candidate.value-raw);
-    if(d<distance || d===distance && best && candidate.kind==='center' && best.kind!=='center'){
-      distance=d;best=candidate;
-    }
+    if(d>=tol)continue;
+    const previous=byValue.get(candidate.value);
+    if(!previous || candidate.kind==='center' && previous.kind!=='center')
+      byValue.set(candidate.value,{...candidate,id:candidate.id||`${candidate.target}:${candidate.kind}:${candidate.value}`,distance:d});
   }
-  return {value:best?best.value:fallback,guide:best?{axis,value:best.target,kind:best.kind}:null};
+  const options=[...byValue.values()].sort((a,b)=>a.distance-b.distance || (a.kind==='center'?-1:b.kind==='center'?1:0));
+  if(drag?.kind?.startsWith('plan-') && options.length)(drag.snapGroups ||= []).push({key,axis,options});
+  const chosen=options.find(c=>drag?.snapOverride?.key===key && drag.snapOverride.id===c.id) || options[0];
+  return {value:chosen?chosen.value:fallback,
+    guide:chosen?{axis,value:chosen.target,kind:chosen.kind,key,choice:options.indexOf(chosen)+1,count:options.length}:null};
 }
-function snapPlanDrawPoint(p,horizontal){
+function snapPlanDrawPoint(p,horizontal,slot='draw-end'){
   const q=planSnap(p);
   if(!ui.layers.smartSnap)return {...q,guides:[]};
   const tol=planSnapTolerance(), half=ui.wallWidth/2;
@@ -949,7 +954,7 @@ function snapPlanDrawPoint(p,horizontal){
       else for(const offset of [-half,half])ys.push({value:f.value+offset,target:f.value,kind:f.kind});
     }
   }
-  const x=nearestPlanValue(p.x,q.x,xs,tol,'x'),y=nearestPlanValue(p.y,q.y,ys,tol,'y');
+  const x=nearestPlanValue(p.x,q.x,xs,tol,'x',`${slot}:x`),y=nearestPlanValue(p.y,q.y,ys,tol,'y',`${slot}:y`);
   return {x:x.value,y:y.value,guides:[x.guide,y.guide].filter(Boolean)};
 }
 function snapPlanWallMove(rect,index){
@@ -958,13 +963,13 @@ function snapPlanWallMove(rect,index){
   for(const w of planWallTargets(index)){
     for(const axis of ['x','y']){
       const candidates=axis==='x'?xs:ys;
-      for(const source of wallAxisFeatures(rect,axis))for(const target of wallAxisFeatures(w,axis)){
+      for(const [si,source] of wallAxisFeatures(rect,axis).entries())for(const [ti,target] of wallAxisFeatures(w,axis).entries()){
         if(source.kind===target.kind)
-          candidates.push({value:target.value-source.value,target:target.value,kind:target.kind});
+          candidates.push({value:target.value-source.value,target:target.value,kind:target.kind,id:`${w.join(',')}:${si}:${ti}`});
       }
     }
   }
-  const dx=nearestPlanValue(0,0,xs,tol,'x'),dy=nearestPlanValue(0,0,ys,tol,'y');
+  const dx=nearestPlanValue(0,0,xs,tol,'x','move:x'),dy=nearestPlanValue(0,0,ys,tol,'y','move:y');
   ui.snapGuides=[dx.guide,dy.guide].filter(Boolean);
   return [rect[0]+dx.value,rect[1]+dy.value,rect[2]+dx.value,rect[3]+dy.value];
 }
@@ -974,7 +979,7 @@ function snapPlanWallEdge(p,index,edge){
   const axis=edge===0||edge===2?'y':'x',candidates=[];
   for(const w of planWallTargets(index))for(const f of wallAxisFeatures(w,axis))
     candidates.push({value:f.value,target:f.value,kind:f.kind});
-  const snapped=nearestPlanValue(p[axis],q[axis],candidates,planSnapTolerance(),axis);
+  const snapped=nearestPlanValue(p[axis],q[axis],candidates,planSnapTolerance(),axis,`resize:${axis}`);
   ui.snapGuides=snapped.guide?[snapped.guide]:[];
   return {...q,[axis]:snapped.value};
 }
@@ -1003,7 +1008,8 @@ function renderEditor(){
   let s='';
   if(ui.layers.smartSnap)for(const guide of ui.snapGuides){
     const vertical=guide.axis==='x', x=guide.value, y=guide.value;
-    const label=guide.kind==='center'?tr('中心线','Centerline'):guide.kind==='midpoint'?tr('中点','Midpoint'):tr('边缘','Edge');
+    const label=(guide.kind==='center'?tr('中心线','Centerline'):guide.kind==='midpoint'?tr('中点','Midpoint'):tr('边缘','Edge'))+
+      (drag?.snapOverride?.key===guide.key && guide.count>1?` · Tab ${guide.choice}/${guide.count}`:'');
     s+=vertical
       ? `<line data-snap-guide="${guide.kind}" x1="${x}" y1="${view.y0}" x2="${x}" y2="${view.y0+svg.clientHeight/view.s}" stroke="#2b73c5" stroke-width="1" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" pointer-events="none"/>`
       : `<line data-snap-guide="${guide.kind}" x1="${view.x0}" y1="${y}" x2="${view.x0+svg.clientWidth/view.s}" y2="${y}" stroke="#2b73c5" stroke-width="1" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" pointer-events="none"/>`;
@@ -1137,7 +1143,7 @@ function planPanel(){
   if(s?.kind==='opening') detail=`<section><h3>${tr('所选门窗','Selected opening')}</h3><div class="actions"><button class="btn danger" id="planDelete">${tr('删除门窗','Delete opening')}</button></div></section>`;
   return `<section><h3>${tr('户型绘图','Floor plan editor')}</h3><div class="actions">${modes.map(([k,v,key])=>`<button class="btn ${ui.planTool===k?'on':''}" data-plan-tool="${k}" aria-pressed="${ui.planTool===k}" title="${tr('快捷键','Shortcut')}: ${key}">${v}<kbd>${key}</kbd></button>`).join('')}</div>
     <div class="form" style="margin-top:12px"><label>${tr('墙体类型','Wall type')}<select id="planWallType"><option value="n" ${ui.wallType==='n'?'selected':''}>${tr('普通隔墙','Partition')}</option><option value="e" ${ui.wallType==='e'?'selected':''}>${tr('外墙','Exterior')}</option><option value="b" ${ui.wallType==='b'?'selected':''}>${tr('承重墙','Bearing')}</option><option value="low" ${ui.wallType==='low'?'selected':''}>${tr('矮墙','Low wall')}</option></select></label><label>${tr('墙厚','Wall thickness')} (mm)<input id="planWallWidth" type="number" min="50" max="1000" step="1" value="${ui.wallWidth}"></label></div>
-    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动；开启「智能吸附」后墙边和中心线会沿蓝色参考线对齐。画房间：逐点点击，双击或 Enter 完成。M 选择墙体；拖动边线或蓝色中点单独调整长或宽，角点沿起始方向锁定单轴，精度 1 mm。按住空格拖动画布。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings; Smart snap aligns wall edges and centerlines along blue guides. Click room corners, then double-click or Enter. M selects walls; drag an edge or blue midpoint to adjust one dimension, or a corner grip to lock to the initial axis. Precision: 1 mm. Hold Space to pan.')}</p>
+    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动；开启「智能吸附」后墙边和中心线会沿蓝色参考线对齐。F3 开关吸附，拖动时按 Tab 切换候选、Shift+Tab 反向切换。画房间：逐点点击，双击或 Enter 完成。M 选择墙体；拖动边线或蓝色中点单独调整长或宽，角点沿起始方向锁定单轴，精度 1 mm。按住空格拖动画布。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings; Smart snap aligns wall edges and centerlines along blue guides. F3 toggles snapping; press Tab while dragging to cycle candidates, or Shift+Tab to cycle backwards. Click room corners, then double-click or Enter. M selects walls; drag an edge or blue midpoint to adjust one dimension, or a corner grip to lock to the initial axis. Precision: 1 mm. Hold Space to pan.')}</p>
     <div class="actions"><button class="btn danger" id="planClear">${tr('清空户型，重新绘制','Clear plan and start over')}</button></div></section>${detail}`;
 }
 function bindPlanPanel(){
@@ -1213,13 +1219,13 @@ function overviewPanel(){
     <kbd>3D walk</kbd><span>Joystick moves, drag to look, tap doors to open</span>
   </div></section>`) : ''}
   ${tr(`<section><h3>键盘快捷键</h3><div class="kbd">
-    <kbd>M</kbd><span>户型选择 / 拖动墙体</span><kbd>L</kbd><span>画墙</span><kbd>PL</kbd><span>画房间轮廓</span><kbd>按住空格</kbd><span>临时拖动画布，松开返回原工具</span>
+    <kbd>M</kbd><span>户型选择 / 拖动墙体</span><kbd>L</kbd><span>画墙</span><kbd>PL</kbd><span>画房间轮廓</span><kbd>F3</kbd><span>开关智能吸附</span><kbd>Tab / Shift+Tab</kbd><span>拖动时切换吸附候选 / 反向切换</span><kbd>按住空格</kbd><span>临时拖动画布，松开返回原工具</span>
     <kbd>DR / WI / SL</kbd><span>画平开门 / 窗 / 推拉门（应用专用）</span><kbd>DI</kbd><span>测距</span><kbd>DE</kbd><span>拆改非承重墙（应用专用）</span>
     <kbd>E / Delete</kbd><span>删除所选对象</span><kbd>CO</kbd><span>复制所选家具</span><kbd>RO</kbd><span>旋转所选家具 90°（Shift 反向）</span>
     <kbd>V</kbd><span>家具选择</span><kbd>ZE / F</kbd><span>适应窗口</span><kbd>T</kbd><span>切换 2D / 3D</span><kbd>Enter</kbd><span>完成房间轮廓</span>
     <kbd>Esc</kbd><span>取消当前操作</span><kbd>方向键</kbd><span>微调家具 10mm（Shift 100mm）</span><kbd>⌘/Ctrl Z</kbd><span>撤销</span>
   </div></section>`, `<section><h3>Keyboard Shortcuts</h3><div class="kbd">
-    <kbd>M</kbd><span>Select / drag plan walls</span><kbd>L</kbd><span>Draw wall</span><kbd>PL</kbd><span>Draw room polygon</span><kbd>Hold Space</kbd><span>Pan temporarily; release to restore the tool</span>
+    <kbd>M</kbd><span>Select / drag plan walls</span><kbd>L</kbd><span>Draw wall</span><kbd>PL</kbd><span>Draw room polygon</span><kbd>F3</kbd><span>Toggle Smart snap</span><kbd>Tab / Shift+Tab</kbd><span>Cycle snap candidates while dragging / reverse</span><kbd>Hold Space</kbd><span>Pan temporarily; release to restore the tool</span>
     <kbd>DR / WI / SL</kbd><span>Draw door / window / sliding door (app aliases)</span><kbd>DI</kbd><span>Measure distance</span><kbd>DE</kbd><span>Demolish non-bearing wall (app alias)</span>
     <kbd>E / Delete</kbd><span>Erase selection</span><kbd>CO</kbd><span>Copy selected furniture</span><kbd>RO</kbd><span>Rotate selected furniture 90° (Shift reverses)</span>
     <kbd>V</kbd><span>Select furniture</span><kbd>ZE / F</kbd><span>Fit to window</span><kbd>T</kbd><span>Toggle 2D / 3D</span><kbd>Enter</kbd><span>Finish room polygon</span>
@@ -1563,6 +1569,80 @@ svg.addEventListener('pointerdown', e => {
   svg.setPointerCapture(e.pointerId);
 });
 
+function updatePlanDrag(p,clientX,clientY){
+  if(!drag?.kind?.startsWith('plan-'))return;
+  drag.snapGroups=[];
+  drag.lastPointer={p,clientX,clientY};
+  const q=planSnap(p);
+  if(Math.hypot(clientX-drag.sx,clientY-drag.sy)>=TAP)drag.moved=true;
+  if(drag.kind==='plan-draw'){
+    if(ui.planTool==='wall'){
+      const horizontal=Math.abs(p.x-drag.start.x)>=Math.abs(p.y-drag.start.y);
+      ui.drawStart=snapPlanDrawPoint(drag.start,horizontal,'draw-start');
+      ui.drawEnd=snapPlanDrawPoint(p,horizontal,'draw-end');
+      const crossAxis=horizontal?'y':'x';
+      const startGuide=ui.drawStart.guides.find(g=>g.axis===crossAxis);
+      const endGuide=ui.drawEnd.guides.find(g=>g.axis===crossAxis);
+      const useEnd=!!endGuide && (!startGuide || drag.snapOverride?.key===`draw-end:${crossAxis}`);
+      if(useEnd)ui.drawStart[crossAxis]=ui.drawEnd[crossAxis];
+      ui.snapGuides=[...ui.drawStart.guides.filter(g=>g.axis!==crossAxis),
+        ...ui.drawEnd.guides.filter(g=>g.axis!==crossAxis),useEnd?endGuide:startGuide].filter(Boolean);
+    }else ui.drawEnd=q;
+    renderEditor();
+    const output=$('#wallDraftLength');if(output)output.textContent=Math.max(Math.abs(ui.drawEnd.x-ui.drawStart.x),Math.abs(ui.drawEnd.y-ui.drawStart.y));
+    return;
+  }
+  if(!drag.moved)return;
+  if(drag.kind==='plan-move-wall'){
+    const w=WALLS[drag.index],dx=q.x-drag.origin.x,dy=q.y-drag.origin.y;
+    const moved=snapPlanWallMove([drag.initial[0]+dx,drag.initial[1]+dy,drag.initial[2]+dx,drag.initial[3]+dy],drag.index);
+    for(let i=0;i<4;i++)w[i]=moved[i];
+    renderWalls();renderEditor();updateWallDimensionFields();return;
+  }
+  if(drag.kind==='plan-resize-wall' || drag.kind==='plan-resize-wall-edge'){
+    const w=WALLS[drag.index];
+    if(drag.kind==='plan-resize-wall' && drag.axis===undefined)
+      drag.axis=Math.abs(clientX-drag.sx)>=Math.abs(clientY-drag.sy)?'x':'y';
+    const c=drag.corner;
+    const edge=drag.kind==='plan-resize-wall-edge' ? drag.edge
+      : drag.axis==='x' ? (c===0||c===3?3:1) : (c===0||c===1?0:2);
+    const point=snapPlanWallEdge(p,drag.index,edge);
+    resizePlanWallEdge(w,edge,point);
+    const actual=edge===0?w[1]:edge===1?w[2]:edge===2?w[3]:w[0];
+    if(ui.snapGuides.length && Math.abs(actual-ui.snapGuides[0].value)>.001)ui.snapGuides=[];
+    renderWalls();renderEditor();updateWallDimensionFields();return;
+  }
+  if(drag.kind==='plan-room-vertex'){
+    const r=ROOMS.find(r=>r.id===drag.id);r.poly[drag.vertex]=[q.x,q.y];
+    const [x0,y0,x1,y1]=bbox(r.poly);r.at=[(x0+x1)/2,(y0+y1)/2];
+    renderRooms();renderLabels();renderSel();renderEditor();
+  }
+}
+function cyclePlanSnap(backward=false){
+  if(!drag?.lastPointer || !ui.layers.smartSnap)return false;
+  const groups=(drag.snapGroups||[]).filter(group=>drag.kind!=='plan-draw' || group.key.startsWith('draw-end'));
+  const alternatives=groups.flatMap(group=>group.options.slice(1).map(option=>({key:group.key,option})));
+  if(!alternatives.length)return false;
+  alternatives.sort((a,b)=>a.option.distance-b.option.distance);
+  const current=alternatives.findIndex(c=>c.key===drag.snapOverride?.key && c.option.id===drag.snapOverride.id);
+  const next=backward ? (current<0?alternatives.length-1:current-1) : current+1;
+  drag.snapOverride=next<0 || next>=alternatives.length?null:{key:alternatives[next].key,id:alternatives[next].option.id};
+  const {p,clientX,clientY}=drag.lastPointer;
+  updatePlanDrag(p,clientX,clientY);
+  return true;
+}
+function toggleSmartSnap(){
+  ui.layers.smartSnap=!ui.layers.smartSnap;
+  const button=document.querySelector('[data-layer="smartSnap"]');
+  button.classList.toggle('on',ui.layers.smartSnap);
+  button.setAttribute('aria-pressed',String(ui.layers.smartSnap));
+  ui.snapGuides=[];
+  if(drag?.kind?.startsWith('plan-')){
+    drag.snapOverride=null;
+    if(drag.lastPointer){const {p,clientX,clientY}=drag.lastPointer;updatePlanDrag(p,clientX,clientY);return;}
+  }
+  renderEditor();
+}
 svg.addEventListener('pointermove', e => {
   if (touches.has(e.pointerId)) touches.set(e.pointerId, {x:e.clientX, y:e.clientY});
   if (pinch){
@@ -1580,51 +1660,10 @@ svg.addEventListener('pointermove', e => {
     if (ui.tool === 'measure' && ui.mA){ ui.mCur = snapPoint(p, e.shiftKey); renderMeasure(); }
     return;
   }
-  const far = Math.hypot(e.clientX-drag.sx, e.clientY-drag.sy) >= TAP;
   if(drag.kind.startsWith('plan-')){
-    const q=planSnap(p);if(far)drag.moved=true;
-    if(drag.kind==='plan-draw'){
-      if(ui.planTool==='wall'){
-        const horizontal=Math.abs(p.x-drag.start.x)>=Math.abs(p.y-drag.start.y);
-        ui.drawStart=snapPlanDrawPoint(drag.start,horizontal);
-        ui.drawEnd=snapPlanDrawPoint(p,horizontal);
-        const crossAxis=horizontal?'y':'x';
-        const startGuide=ui.drawStart.guides.find(g=>g.axis===crossAxis);
-        const endGuide=ui.drawEnd.guides.find(g=>g.axis===crossAxis);
-        if(!startGuide && endGuide)ui.drawStart[crossAxis]=ui.drawEnd[crossAxis];
-        ui.snapGuides=[...ui.drawStart.guides.filter(g=>g.axis!==crossAxis),
-          ...ui.drawEnd.guides.filter(g=>g.axis!==crossAxis),startGuide||endGuide].filter(Boolean);
-      }else ui.drawEnd=q;
-      renderEditor();
-      const output=$('#wallDraftLength');if(output)output.textContent=Math.max(Math.abs(ui.drawEnd.x-ui.drawStart.x),Math.abs(ui.drawEnd.y-ui.drawStart.y));
-      return;
-    }
-    if(!drag.moved)return;
-    if(drag.kind==='plan-move-wall'){
-      const w=WALLS[drag.index],dx=q.x-drag.origin.x,dy=q.y-drag.origin.y;
-      const moved=snapPlanWallMove([drag.initial[0]+dx,drag.initial[1]+dy,drag.initial[2]+dx,drag.initial[3]+dy],drag.index);
-      for(let i=0;i<4;i++)w[i]=moved[i];
-      renderWalls();renderEditor();updateWallDimensionFields();return;
-    }
-    if(drag.kind==='plan-resize-wall' || drag.kind==='plan-resize-wall-edge'){
-      const w=WALLS[drag.index];
-      if(drag.kind==='plan-resize-wall' && drag.axis===undefined)
-        drag.axis=Math.abs(e.clientX-drag.sx)>=Math.abs(e.clientY-drag.sy)?'x':'y';
-      const c=drag.corner;
-      const edge=drag.kind==='plan-resize-wall-edge' ? drag.edge
-        : drag.axis==='x' ? (c===0||c===3?3:1) : (c===0||c===1?0:2);
-      const point=snapPlanWallEdge(p,drag.index,edge);
-      resizePlanWallEdge(w,edge,point);
-      const actual=edge===0?w[1]:edge===1?w[2]:edge===2?w[3]:w[0];
-      if(ui.snapGuides.length && Math.abs(actual-ui.snapGuides[0].value)>.001)ui.snapGuides=[];
-      renderWalls();renderEditor();updateWallDimensionFields();return;
-    }
-    if(drag.kind==='plan-room-vertex'){
-      const r=ROOMS.find(r=>r.id===drag.id);r.poly[drag.vertex]=[q.x,q.y];
-      const [x0,y0,x1,y1]=bbox(r.poly);r.at=[(x0+x1)/2,(y0+y1)/2];
-      renderRooms();renderLabels();renderSel();renderEditor();return;
-    }
+    updatePlanDrag(p,e.clientX,e.clientY);return;
   }
+  const far = Math.hypot(e.clientX-drag.sx, e.clientY-drag.sy) >= TAP;
   if (drag.kind === 'measure'){
     if (far) drag.moved = true;
     ui.mCur = snapPoint(p, e.shiftKey); renderMeasure(); return;
@@ -1705,9 +1744,16 @@ function cadLetter(k,shift){
   return false;
 }
 document.addEventListener('keydown', e => {
-  if (e.target.matches('input,select,textarea,[contenteditable]')){clearCadPrefix();return;}
+  if (e.target.matches('input,select,textarea,[contenteditable]') && e.key!=='F3' &&
+      !(drag?.kind?.startsWith('plan-') && e.key==='Tab')){clearCadPrefix();return;}
   if (window.View3D?.walking()) return;
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
+  if(e.key==='F3' && !mod && !e.altKey && !is3D()){
+    e.preventDefault();if(e.repeat)return;
+    clearCadPrefix();toggleSmartSnap();
+    toast(ui.layers.smartSnap?tr('智能吸附已开启','Smart snap on'):tr('智能吸附已关闭','Smart snap off'));
+    return;
+  }
   if(e.code==='Space' && !mod && !e.altKey && !is3D()){
     e.preventDefault();clearCadPrefix();
     if(!drag){spacePan=true;svg.classList.add('space-pan');}
@@ -1717,6 +1763,9 @@ document.addEventListener('keydown', e => {
   if (mod && k === 'y'){ e.preventDefault(); redo(); return; }
   if (mod && k === 'd'){ e.preventDefault(); duplicateSel(); return; }
   if (mod || e.altKey) {clearCadPrefix();return;}
+  if(k==='tab' && drag?.kind?.startsWith('plan-') && !is3D()){
+    e.preventDefault();clearCadPrefix();cyclePlanSnap(e.shiftKey);return;
+  }
   if (k === '[' || k === ']'){ drawer(k === '[' ? 'lib' : 'panel'); return; }
   if (k === 'f' && e.shiftKey){ toggleFullscreen(); return; }
   if(k==='escape'){
@@ -1883,9 +1932,10 @@ document.querySelectorAll('#viewSeg .btn').forEach(b => b.onclick = () => setVie
 
 document.querySelectorAll('#tools .btn').forEach(b => b.onclick = () => setTool(b.dataset.tool));
 document.querySelectorAll('#layers .btn').forEach(b => b.onclick = () => {
-  const k = b.dataset.layer; ui.layers[k] = !ui.layers[k]; b.classList.toggle('on', ui.layers[k]);
+  const k = b.dataset.layer;
+  if(k==='smartSnap'){toggleSmartSnap();return;}
+  ui.layers[k] = !ui.layers[k]; b.classList.toggle('on', ui.layers[k]);
   if (k === 'dims') $('#gDims').setAttribute('display', ui.layers.dims ? 'inline' : 'none');
-  else if (k === 'smartSnap'){ui.snapGuides=[];renderEditor();}
   else renderAll();
 });
 $('#zoomIn').onclick = () => zoomCenter(1.25);
