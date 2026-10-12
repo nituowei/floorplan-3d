@@ -57,6 +57,10 @@ main{position:relative;overflow:hidden;background:var(--paper)}
 #plan.panning{cursor:grabbing}
 #plan.tool-measure{cursor:crosshair}
 #plan.tool-plan{cursor:crosshair}
+#plan.space-pan{cursor:grab}
+#plan.space-pan.panning{cursor:grabbing}
+#plan.space-pan *{cursor:grab!important}
+#plan.space-pan.panning *{cursor:grabbing!important}
 #plan.tool-plan .wall,#plan.tool-plan .room,#plan.tool-plan [data-opening]{pointer-events:all;cursor:pointer}
 #plan.tool-plan .furn{pointer-events:none}
 #gEditor [data-wall-handle],#gEditor [data-room-vertex]{cursor:move}
@@ -907,6 +911,53 @@ function renderAll(){
 
 /* ======================= 户型绘图 ======================= */
 const planSnap = p => ({x:Math.round(p.x/50)*50, y:Math.round(p.y/50)*50});
+const planSnapTolerance = () => Math.min(350,14/view.s);
+function planWallTargets(exclude=-1){
+  return WALLS.filter((w,i)=>i!==exclude && !state.demolished.includes('w'+i));
+}
+function nearestPlanValue(raw, fallback, candidates, tol){
+  let result=fallback, distance=tol;
+  for(const candidate of candidates){
+    const d=Math.abs(candidate-raw);
+    if(d<distance){distance=d;result=candidate;}
+  }
+  return result;
+}
+function snapPlanDrawPoint(p,horizontal){
+  const tol=planSnapTolerance(), half=ui.wallWidth/2;
+  const xs=[],ys=[];
+  for(const w of planWallTargets()){
+    if(p.y>=w[1]-tol-half && p.y<=w[3]+tol+half){
+      if(horizontal)xs.push(w[0],w[2]);
+      else xs.push((w[0]+w[2])/2,w[0]-half,w[0]+half,w[2]-half,w[2]+half);
+    }
+    if(p.x>=w[0]-tol-half && p.x<=w[2]+tol+half){
+      if(horizontal)ys.push((w[1]+w[3])/2,w[1]-half,w[1]+half,w[3]-half,w[3]+half);
+      else ys.push(w[1],w[3]);
+    }
+  }
+  return {x:nearestPlanValue(p.x,planSnap(p).x,xs,tol),y:nearestPlanValue(p.y,planSnap(p).y,ys,tol)};
+}
+function snapPlanWallMove(rect,index){
+  const tol=planSnapTolerance(), xs=[],ys=[];
+  for(const w of planWallTargets(index)){
+    if(rect[3]>=w[1]-tol && rect[1]<=w[3]+tol)
+      for(const edge of [rect[0],rect[2]])for(const target of [w[0],w[2]])xs.push(target-edge);
+    if(rect[2]>=w[0]-tol && rect[0]<=w[2]+tol)
+      for(const edge of [rect[1],rect[3]])for(const target of [w[1],w[3]])ys.push(target-edge);
+  }
+  const dx=nearestPlanValue(0,0,xs,tol),dy=nearestPlanValue(0,0,ys,tol);
+  return [rect[0]+dx,rect[1]+dy,rect[2]+dx,rect[3]+dy];
+}
+function snapPlanWallCorner(p,index){
+  const tol=planSnapTolerance(), xs=[],ys=[];
+  for(const w of planWallTargets(index)){
+    if(p.y>=w[1]-tol && p.y<=w[3]+tol)xs.push(w[0],w[2]);
+    if(p.x>=w[0]-tol && p.x<=w[2]+tol)ys.push(w[1],w[3]);
+  }
+  const q=planSnap(p);
+  return {x:nearestPlanValue(p.x,q.x,xs,tol),y:nearestPlanValue(p.y,q.y,ys,tol)};
+}
 function planRect(a,b,width=ui.wallWidth){
   const horizontal = Math.abs(b.x-a.x) >= Math.abs(b.y-a.y), half=Math.round(width/2);
   return horizontal ? [Math.min(a.x,b.x),a.y-half,Math.max(a.x,b.x),a.y+width-half]
@@ -1034,7 +1085,7 @@ function planPanel(){
   if(s?.kind==='opening') detail=`<section><h3>${tr('所选门窗','Selected opening')}</h3><div class="actions"><button class="btn danger" id="planDelete">${tr('删除门窗','Delete opening')}</button></div></section>`;
   return `<section><h3>${tr('户型绘图','Floor plan editor')}</h3><div class="actions">${modes.map(([k,v,key])=>`<button class="btn ${ui.planTool===k?'on':''}" data-plan-tool="${k}" aria-pressed="${ui.planTool===k}" title="${tr('快捷键','Shortcut')}: ${key}">${v}<kbd>${key}</kbd></button>`).join('')}</div>
     <div class="form" style="margin-top:12px"><label>${tr('墙体类型','Wall type')}<select id="planWallType"><option value="n" ${ui.wallType==='n'?'selected':''}>${tr('普通隔墙','Partition')}</option><option value="e" ${ui.wallType==='e'?'selected':''}>${tr('外墙','Exterior')}</option><option value="b" ${ui.wallType==='b'?'selected':''}>${tr('承重墙','Bearing')}</option><option value="low" ${ui.wallType==='low'?'selected':''}>${tr('矮墙','Low wall')}</option></select></label><label>${tr('墙厚','Wall thickness')} (mm)<input id="planWallWidth" type="number" min="50" max="1000" step="10" value="${ui.wallWidth}"></label></div>
-    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动。画房间：逐点点击，双击或 Enter 完成。M 选择并拖动墙体，拖动白色点改尺寸。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings. Click room corners, then double-click or Enter. M selects and drags walls; drag white handles to resize.')}</p>
+    <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动，墙角会吸附到已有墙边。画房间：逐点点击，双击或 Enter 完成。M 选择并拖动墙体，拖动白色点改尺寸；按住空格拖动画布。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings; wall corners snap to existing edges. Click room corners, then double-click or Enter. M selects and drags walls; drag white handles to resize. Hold Space to pan.')}</p>
     <div class="actions"><button class="btn danger" id="planClear">${tr('清空户型，重新绘制','Clear plan and start over')}</button></div></section>${detail}`;
 }
 function bindPlanPanel(){
@@ -1110,13 +1161,13 @@ function overviewPanel(){
     <kbd>3D walk</kbd><span>Joystick moves, drag to look, tap doors to open</span>
   </div></section>`) : ''}
   ${tr(`<section><h3>键盘快捷键</h3><div class="kbd">
-    <kbd>M</kbd><span>户型选择 / 拖动墙体</span><kbd>L</kbd><span>画墙</span><kbd>PL</kbd><span>画房间轮廓</span>
+    <kbd>M</kbd><span>户型选择 / 拖动墙体</span><kbd>L</kbd><span>画墙</span><kbd>PL</kbd><span>画房间轮廓</span><kbd>按住空格</kbd><span>临时拖动画布，松开返回原工具</span>
     <kbd>DR / WI / SL</kbd><span>画平开门 / 窗 / 推拉门（应用专用）</span><kbd>DI</kbd><span>测距</span><kbd>DE</kbd><span>拆改非承重墙（应用专用）</span>
     <kbd>E / Delete</kbd><span>删除所选对象</span><kbd>CO</kbd><span>复制所选家具</span><kbd>RO</kbd><span>旋转所选家具 90°（Shift 反向）</span>
     <kbd>V</kbd><span>家具选择</span><kbd>ZE / F</kbd><span>适应窗口</span><kbd>T</kbd><span>切换 2D / 3D</span><kbd>Enter</kbd><span>完成房间轮廓</span>
     <kbd>Esc</kbd><span>取消当前操作</span><kbd>方向键</kbd><span>微调家具 10mm（Shift 100mm）</span><kbd>⌘/Ctrl Z</kbd><span>撤销</span>
   </div></section>`, `<section><h3>Keyboard Shortcuts</h3><div class="kbd">
-    <kbd>M</kbd><span>Select / drag plan walls</span><kbd>L</kbd><span>Draw wall</span><kbd>PL</kbd><span>Draw room polygon</span>
+    <kbd>M</kbd><span>Select / drag plan walls</span><kbd>L</kbd><span>Draw wall</span><kbd>PL</kbd><span>Draw room polygon</span><kbd>Hold Space</kbd><span>Pan temporarily; release to restore the tool</span>
     <kbd>DR / WI / SL</kbd><span>Draw door / window / sliding door (app aliases)</span><kbd>DI</kbd><span>Measure distance</span><kbd>DE</kbd><span>Demolish non-bearing wall (app alias)</span>
     <kbd>E / Delete</kbd><span>Erase selection</span><kbd>CO</kbd><span>Copy selected furniture</span><kbd>RO</kbd><span>Rotate selected furniture 90° (Shift reverses)</span>
     <kbd>V</kbd><span>Select furniture</span><kbd>ZE / F</kbd><span>Fit to window</span><kbd>T</kbd><span>Toggle 2D / 3D</span><kbd>Enter</kbd><span>Finish room polygon</span>
@@ -1363,7 +1414,7 @@ function snapPoint(p, shift){
 }
 
 /* ======================= 指针交互 ======================= */
-let drag = null, pinch = null;
+let drag = null, pinch = null, spacePan = false;
 const touches = new Map();                     // 当前按在平面图上的手指
 const svgXY = (x, y) => { const r = svg.getBoundingClientRect(); return [x - r.left, y - r.top]; };
 function pinchInfo(){
@@ -1393,7 +1444,7 @@ function endDrag(cancel){
     renderMeasure(); return;                   // 没拖动：保留起点，等第二次点击
   }
   if (d.kind === 'pan'){
-    if (!cancel && !d.moved && ui.tool === 'select') select(d.room ? {kind:'room', id:d.room} : null);
+    if (!cancel && !d.moved && !d.temp && ui.tool === 'select') select(d.room ? {kind:'room', id:d.room} : null);
     return;
   }
   if (d.moved){ commit(d.before); renderAll(); }
@@ -1413,6 +1464,10 @@ svg.addEventListener('pointerdown', e => {
     }
   }
   if (pinch) return;
+  if(spacePan && e.pointerType==='mouse'){
+    drag={kind:'pan',temp:true,sx:e.clientX,sy:e.clientY,x0:view.x0,y0:view.y0,moved:false};
+    svg.setPointerCapture(e.pointerId);return;
+  }
   const p = toMM(e), t = e.target;
   if(ui.tool==='plan'){
     const q=planSnap(p);
@@ -1421,7 +1476,7 @@ svg.addEventListener('pointerdown', e => {
       renderEditor();return;
     }
     if(ui.planTool!=='select'){
-      ui.drawStart=q;ui.drawEnd=q;drag={kind:'plan-draw',sx:e.clientX,sy:e.clientY,moved:false};
+      ui.drawStart=q;ui.drawEnd=q;drag={kind:'plan-draw',start:p,sx:e.clientX,sy:e.clientY,moved:false};
       svg.setPointerCapture(e.pointerId);renderEditor();renderPanel();return;
     }
     const wh=t.closest('[data-wall-handle]'),rv=t.closest('[data-room-vertex]'),wall=t.closest('[data-wall]'),room=t.closest('[data-room]'),opening=t.closest('[data-opening]');
@@ -1476,20 +1531,26 @@ svg.addEventListener('pointermove', e => {
   if(drag.kind.startsWith('plan-')){
     const q=planSnap(p);if(far)drag.moved=true;
     if(drag.kind==='plan-draw'){
-      ui.drawEnd=q;renderEditor();
-      const output=$('#wallDraftLength');if(output)output.textContent=Math.max(Math.abs(q.x-ui.drawStart.x),Math.abs(q.y-ui.drawStart.y));
+      if(ui.planTool==='wall'){
+        const horizontal=Math.abs(p.x-drag.start.x)>=Math.abs(p.y-drag.start.y);
+        ui.drawStart=snapPlanDrawPoint(drag.start,horizontal);
+        ui.drawEnd=snapPlanDrawPoint(p,horizontal);
+      }else ui.drawEnd=q;
+      renderEditor();
+      const output=$('#wallDraftLength');if(output)output.textContent=Math.max(Math.abs(ui.drawEnd.x-ui.drawStart.x),Math.abs(ui.drawEnd.y-ui.drawStart.y));
       return;
     }
     if(!drag.moved)return;
     if(drag.kind==='plan-move-wall'){
       const w=WALLS[drag.index],dx=q.x-drag.origin.x,dy=q.y-drag.origin.y;
-      for(let i=0;i<4;i++)w[i]=drag.initial[i]+(i%2===0?dx:dy);
+      const moved=snapPlanWallMove([drag.initial[0]+dx,drag.initial[1]+dy,drag.initial[2]+dx,drag.initial[3]+dy],drag.index);
+      for(let i=0;i<4;i++)w[i]=moved[i];
       renderWalls();renderEditor();updateWallDimensionFields();return;
     }
     if(drag.kind==='plan-resize-wall'){
-      const w=WALLS[drag.index], c=drag.corner;
-      if(c===0||c===3)w[0]=Math.min(q.x,w[2]-50);else w[2]=Math.max(q.x,w[0]+50);
-      if(c===0||c===1)w[1]=Math.min(q.y,w[3]-50);else w[3]=Math.max(q.y,w[1]+50);
+      const w=WALLS[drag.index], c=drag.corner, corner=snapPlanWallCorner(p,drag.index);
+      if(c===0||c===3)w[0]=Math.min(corner.x,w[2]-50);else w[2]=Math.max(corner.x,w[0]+50);
+      if(c===0||c===1)w[1]=Math.min(corner.y,w[3]-50);else w[3]=Math.max(corner.y,w[1]+50);
       renderWalls();renderEditor();updateWallDimensionFields();return;
     }
     if(drag.kind==='plan-room-vertex'){
@@ -1581,6 +1642,11 @@ document.addEventListener('keydown', e => {
   if (e.target.matches('input,select,textarea,[contenteditable]')){clearCadPrefix();return;}
   if (window.View3D?.walking()) return;
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
+  if(e.code==='Space' && !mod && !e.altKey && !is3D()){
+    e.preventDefault();clearCadPrefix();
+    if(!drag){spacePan=true;svg.classList.add('space-pan');}
+    return;
+  }
   if (mod && k === 'z'){ e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && k === 'y'){ e.preventDefault(); redo(); return; }
   if (mod && k === 'd'){ e.preventDefault(); duplicateSel(); return; }
@@ -1612,6 +1678,18 @@ document.addEventListener('keydown', e => {
   }
   else if (k === '+' || k === '=') zoomCenter(1.25);
   else if (k === '-') zoomCenter(.8);
+});
+document.addEventListener('keyup',e=>{
+  if(e.code!=='Space')return;
+  if(spacePan){
+    spacePan=false;svg.classList.remove('space-pan');
+    if(drag?.temp)endDrag(false);
+    e.preventDefault();
+  }
+});
+window.addEventListener('blur',()=>{
+  spacePan=false;svg.classList.remove('space-pan');
+  if(drag?.temp)endDrag(false);
 });
 
 /* ======================= 家具库 ======================= */
@@ -1712,7 +1790,7 @@ const is3D = () => viewMode === '3d';
 const TIPS = () => COARSE
   ? {'2d':tr('点或拖动家具库添加 · 单指拖动平移 · 双指缩放 · 选中家具后底部工具条可旋转 / 复制 / 删除', 'Tap or drag from the library · 1 finger pans · pinch zooms · bottom bar rotates / duplicates / deletes'),
      '3d':tr('点墙体修改尺寸和高度 · 单指旋转 · 双指缩放 / 平移 · 点门开关', 'Tap a wall to edit its size and height · 1 finger orbits · 2 fingers zoom / pan · tap doors to open')}
-  : {'2d':tr('拖动左侧家具到平面图 · 滚轮缩放 · 拖动空白处平移 · T 切换 3D', 'Drag furniture onto the plan · scroll to zoom · drag empty space to pan · T for 3D'),
+  : {'2d':tr('按住空格拖动画布 · 墙角吸附已有墙边 · 滚轮缩放 · T 切换 3D', 'Hold Space to pan · wall corners snap to edges · scroll to zoom · T for 3D'),
      '3d':tr('点击墙体修改高度 · 右侧修改会立即生效 · T 返回 2D', 'Click a wall to edit its height · panel changes apply instantly · T for 2D')};
 async function setView(m){
   if (m === viewMode || switching) return;

@@ -53,6 +53,7 @@ python3 -m http.server 8000
 | --- | --- |
 | `T` | Toggle 2D / 3D |
 | `M` / `L` / `PL` | Select and drag plan walls / draw wall / draw room polygon |
+| Hold `Space` | Pan the canvas temporarily; release to restore the current tool |
 | `DR` / `WI` / `SL` | Draw door / window / sliding door (app-specific aliases) |
 | `DI` / `DE` | Measure distance / demolish non-bearing walls (`DE` is app-specific) |
 | `E` / `Delete` / `Backspace` | Erase selected plan object or furniture |
@@ -79,7 +80,7 @@ Type two-letter commands in sequence (for example `P` then `L`), without pressin
 
 ## Customizing the Floor Plan
 
-Click **Edit Plan** in the 2D toolbar and choose a drawing tool in the right panel. Clear the sample plan to start from scratch (undoable); export a JSON backup first if needed. Drag to draw horizontal or vertical walls and openings. Click room vertices, then press Enter or double-click to finish; rename the new room in the right panel. Use Select to move walls, resize them with the white handles, reshape rooms by dragging vertices, or delete selected geometry. Rooms and walls are separate shapes and must be aligned from your measurements. Drawing a door or window on a single aligned wall segment cuts an opening in it; for complex intersections, draw the wall segments around the opening.
+Click **Edit Plan** in the 2D toolbar and choose a drawing tool in the right panel. Clear the sample plan to start from scratch (undoable); export a JSON backup first if needed. Drag to draw horizontal or vertical walls and openings. Wall ends, moved walls, and resize handles snap to nearby wall edges. Hold Space to pan without switching tools. Click room vertices, then press Enter or double-click to finish; rename the new room in the right panel. Use Select to move walls, resize them with the white handles, reshape rooms by dragging vertices, or delete selected geometry. Rooms and walls are separate shapes and must be aligned from your measurements. Drawing a door or window on a single aligned wall segment cuts an opening in it; for complex intersections, draw the wall segments around the opening.
 
 Geometry is saved with furniture in browser local storage and in exported plan JSON. GitHub Pages hosts the app files, not visitor plans. Older furniture-only JSON plans can still be imported with the built-in geometry.
 
