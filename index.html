@@ -62,7 +62,7 @@ main{position:relative;overflow:hidden;background:var(--paper)}
 #plan.space-pan *{cursor:grab!important}
 #plan.space-pan.panning *{cursor:grabbing!important}
 #plan.tool-plan .wall,#plan.tool-plan .room,#plan.tool-plan [data-opening]{pointer-events:all;cursor:move}
-#plan.tool-plan .furn{pointer-events:none}
+#plan.tool-select .wall{pointer-events:all;cursor:move}
 #gEditor [data-wall-handle],#gEditor [data-room-vertex]{cursor:move}
 #gEditor [data-opening-body]{cursor:move}
 #gEditor [data-opening-corner]{cursor:nwse-resize}
@@ -1488,7 +1488,7 @@ function planPanel(){
   return `<section><h3>${tr('户型绘图','Floor plan editor')}</h3><div class="actions">${modes.map(([k,v,key])=>`<button class="btn ${ui.planTool===k?'on':''}" data-plan-tool="${k}" aria-pressed="${ui.planTool===k}" title="${tr('快捷键','Shortcut')}: ${key}">${v}<kbd>${key}</kbd></button>`).join('')}</div>
     <div class="form" style="margin-top:12px"><label>${tr('墙体类型','Wall type')}<select id="planWallType"><option value="n" ${ui.wallType==='n'?'selected':''}>${tr('普通隔墙','Partition')}</option><option value="e" ${ui.wallType==='e'?'selected':''}>${tr('外墙','Exterior')}</option><option value="b" ${ui.wallType==='b'?'selected':''}>${tr('承重墙','Bearing')}</option><option value="low" ${ui.wallType==='low'?'selected':''}>${tr('矮墙','Low wall')}</option></select></label><label>${tr('墙厚','Wall thickness')} (mm)<input id="planWallWidth" type="number" min="50" max="1000" step="1" value="${ui.wallWidth}"></label></div></section>${detail}<section>
     <p class="muted">${tr('直接按快捷键切换工具；双字母命令连续输入。画墙、门、窗：按住鼠标拖动；智能吸附会把门窗贴到墙体中心线并匹配墙厚，房间顶点也可对齐墙边。吸附时显示蓝色参考线并播放提示音。F3 开关吸附，拖动时按 Tab 切换候选、Shift+Tab 反向切换。画房间：逐点点击，双击或 Enter 完成。按住空格拖动画布。', 'Press a shortcut to switch tools; type two-letter commands in sequence. Drag to draw walls and openings. Smart Snap fits openings to a wall centerline and thickness, and aligns room vertices to wall edges. A blue guide and short sound confirm a lock. F3 toggles snapping; Tab cycles candidates and Shift+Tab reverses. Click room corners, then double-click or Enter. Hold Space to pan.')}</p>
-    <p class="muted">${tr('直接拖动已有门窗、墙体和房间中心可移动；门窗能直接吸附到另一面墙，按住 Alt 可暂时关闭贴墙吸附。若要在已有图形上开始新绘制，按住 Shift；画门窗时按住 Alt 也可拖动墙体。','Drag an existing opening, wall, or room center to move it. Openings snap directly to another wall; hold Alt to temporarily bypass wall snapping. Hold Shift to start a new shape over an existing one; Alt can also move a wall while using an opening tool.')}</p>
+    <p class="muted">${tr('直接拖动已有门窗、墙体和房间中心可移动；点击家具会自动切到“选择”，点击墙体或门窗会返回“编辑户型”。门窗能直接吸附到另一面墙，按住 Alt 可暂时关闭贴墙吸附。若要在已有图形上开始新绘制，按住 Shift；画门窗时按住 Alt 也可拖动墙体。','Drag an existing opening, wall, or room center to move it. Clicking furniture switches to Select; clicking a wall or opening returns to Edit plan. Openings snap directly to another wall; hold Alt to temporarily bypass wall snapping. Hold Shift to start a new shape over an existing one; Alt can also move a wall while using an opening tool.')}</p>
     <div class="actions"><button class="btn danger" id="planClear">${tr('清空户型，重新绘制','Clear plan and start over')}</button></div></section>`;
 }
 function bindPlanPanel(){
@@ -1734,6 +1734,7 @@ function pushOut(f){
 function addItem(it, x, y){
   const [type,name,w,d,color] = it, f = F(type,name,Math.round(x/10)*10,Math.round(y/10)*10,w,d,0,color);
   pushOut(f);
+  if(ui.tool==='plan') setTool('select');
   ui.sel = {kind:'furn', id:f.id};
   mutate(() => type==='rug' ? state.furniture.unshift(f) : state.furniture.push(f));
   toast(tr(`已添加「${name}」${w}×${d}`, `Added "${nm(name)}" ${w}×${d}`));
@@ -1919,6 +1920,10 @@ svg.addEventListener('pointerdown', e => {
     svg.setPointerCapture(e.pointerId);return;
   }
   const p = toMM(e), t = e.target;
+  if(ui.tool==='plan' && t.closest('[data-fid]')) setTool('select');
+  else if(ui.tool==='select' && t.closest('[data-wall],[data-opening]')){
+    setTool('plan'); ui.planTool='select';
+  }
   if(ui.tool==='plan'){
     const q=planSnap(p);
     const wh=t.closest('[data-wall-handle]'),we=t.closest('[data-wall-edge]'),rv=t.closest('[data-room-vertex]'),re=t.closest('[data-room-edge]');
