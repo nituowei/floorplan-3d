@@ -9,8 +9,9 @@ A pure front-end tool for interior design on a floor plan: draw rooms and walls,
 **2D Floor Plan**
 - Draw walls, rooms, doors, and windows in Edit Plan mode; the side panel shows wall length and thickness live while drawing, then selects the finished wall for precise numeric editing
 - Click a wall in the 3D orbit view to edit its individual height (100–6000 mm); older plans retain their default wall heights
-- Move or resize finished hinged doors, windows, and sliding doors with the mouse; enter exact opening width and depth in the side panel. Openings inside a wall adjust neighboring wall ends as they move or resize.
-- Drag the body of a wall or room to move it without switching to Select; room vertices reshape the outline
+- Move or resize finished hinged doors, windows, and sliding doors with the mouse; enter exact opening width and depth in the side panel. Flip a door's hinge or swing and set its 3D height; set a window's sill height and window height.
+- Openings cut walls at corners and intersections. Moving, resizing, or deleting an opening repairs the old cut.
+- Drag the body of a wall or room to move it without switching to Select; drag room vertices or whole edges to reshape the outline, or enter room width and depth
 - Displays the original floor plan at 1:60 / 1:100 scale, dimensions in mm
 - Drag 60+ furniture and appliance items from the library on the left (bedroom, living room, dining & kitchen, bathroom, appliances, study & leisure)
 - Move, rotate (hold Shift for free angle), and resize items, with automatic snapping to walls
@@ -82,7 +83,7 @@ Type two-letter commands in sequence (for example `P` then `L`), without pressin
 
 ## Customizing the Floor Plan
 
-Click **Edit Plan** in the 2D toolbar and choose a drawing tool in the right panel. Clear the sample plan to start from scratch (undoable); export a JSON backup first if needed. Drag to draw horizontal or vertical walls and openings. Wall ends, moved walls, and resize handles snap to nearby wall edges. Hold Space to pan without switching tools. Click room vertices, then press Enter or double-click to finish; rename the new room in the right panel. Use Select to move walls, then drag an edge or its midpoint grip to resize one dimension at a time. Corner grips lock to the initial drag axis. Grips shrink as you zoom out, and plan dragging rounds to 1 mm. Rooms and walls are separate shapes and must be aligned from your measurements. Drawing a door or window on a single aligned wall segment cuts an opening in it; for complex intersections, draw the wall segments around the opening.
+Click **Edit Plan** in the 2D toolbar and choose a drawing tool in the right panel. Clear the sample plan to start from scratch (undoable); export a JSON backup first if needed. Drag to draw horizontal or vertical walls and openings. Wall ends, moved walls, and resize handles snap to nearby wall edges. Hold Space to pan without switching tools. Click room vertices, then press Enter or double-click to finish. Enter room width and depth, or drag a blue edge grip to move a whole room edge. Drag a wall edge or midpoint grip to resize one dimension at a time. Corner grips lock to the initial drag axis. Grips shrink as you zoom out, and plan dragging rounds to 1 mm. Rooms and walls are separate shapes and must be aligned from your measurements. Drawing an opening at a corner or wall intersection cuts the intersecting walls; moving or deleting it repairs the previous cut. Select a door and switch to 3D to edit its height, or click a door or window in 3D to open its settings.
 
 Geometry is saved with furniture in browser local storage and in exported plan JSON. GitHub Pages hosts the app files, not visitor plans. Older furniture-only JSON plans can still be imported with the built-in geometry.
 
