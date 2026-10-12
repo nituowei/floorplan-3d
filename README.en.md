@@ -9,7 +9,8 @@ A pure front-end tool for interior design on a floor plan: draw rooms and walls,
 **2D Floor Plan**
 - Draw walls, rooms, doors, and windows in Edit Plan mode; the side panel shows wall length and thickness live while drawing, then selects the finished wall for precise numeric editing
 - Click a wall in the 3D orbit view to edit its individual height (100–6000 mm); older plans retain their default wall heights
-- Move walls and room vertices with the mouse
+- Move or resize finished hinged doors, windows, and sliding doors with the mouse; enter exact opening width and depth in the side panel. Openings inside a wall adjust neighboring wall ends as they move or resize.
+- Drag the body of a wall or room to move it without switching to Select; room vertices reshape the outline
 - Displays the original floor plan at 1:60 / 1:100 scale, dimensions in mm
 - Drag 60+ furniture and appliance items from the library on the left (bedroom, living room, dining & kitchen, bathroom, appliances, study & leisure)
 - Move, rotate (hold Shift for free angle), and resize items, with automatic snapping to walls
