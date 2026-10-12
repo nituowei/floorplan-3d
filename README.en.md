@@ -13,6 +13,7 @@ A pure front-end tool for interior design on a floor plan: draw rooms and walls,
 - Displays the original floor plan at 1:60 / 1:100 scale, dimensions in mm
 - Drag 60+ furniture and appliance items from the library on the left (bedroom, living room, dining & kitchen, bathroom, appliances, study & leisure)
 - Move, rotate (hold Shift for free angle), and resize items, with automatic snapping to walls
+- A short synthesized sound plays when Smart Snap locks onto a new target or Tab switches candidates; the toolbar sound button mutes it and remembers the setting in this browser
 - Measuring tool (snaps to nearby walls; hold Shift to lock horizontal / vertical)
 - Remove or modify non-load-bearing walls; load-bearing walls are marked separately
 - Layer toggles: dimensions, room names, furniture, grid, load-bearing walls

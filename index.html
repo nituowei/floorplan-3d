@@ -285,6 +285,9 @@ main.drawer-panel #fab{opacity:0;visibility:hidden}
       <button class="btn chip" data-layer="bearing" data-en="Bearing walls">承重墙</button>
       <button class="btn chip on" data-layer="smartSnap" aria-pressed="true" title="F3 开关；拖动时按 Tab 切换边缘、端点和中心线" data-en-title="F3 toggles; press Tab while dragging to cycle wall edges, endpoints, and centerlines" data-en="Smart snap">智能吸附</button>
     </div>
+    <div class="grp">
+      <button class="btn chip on" id="snapSound" aria-pressed="true" title="开启或关闭吸附提示音" data-en-title="Toggle snap sound" data-en="Snap sound">吸附音效</button>
+    </div>
     <div class="grp only3d">
       <button class="btn chip on" data-cut="2.8" data-en="Full walls">全高墙</button>
       <button class="btn chip" data-cut="1.2" data-en="Cut walls">剖切墙</button>
@@ -563,6 +566,7 @@ function defaultState(){
 }
 
 const STORE = 'huxing-design-v1';
+const SNAP_SOUND_STORE = 'huxing-snap-sound-v1';
 const validRect = r => Array.isArray(r) && r.length>=4 && r.slice(0,4).every(Number.isFinite) && r[2]>r[0] && r[3]>r[1];
 function validPlan(p){
   return p && ['walls','wins','doors','slides','rooms'].every(k=>Array.isArray(p[k])) &&
@@ -605,6 +609,7 @@ const svg = $('#plan');
 /* ======================= 状态 / 历史 / 存储 ======================= */
 let state = load() || defaultState();
 const ui = {tool:'select', planTool:'select', wallType:'n', wallWidth:240, sel:null, mA:null, mCur:null, draftPoly:[], draftCursor:null, snapGuides:[],
+  snapSound:(()=>{try{return localStorage.getItem(SNAP_SOUND_STORE)!=='off';}catch(e){return true;}})(),
   layers:{dims:true, labels:true, furn:true, grid:false, bearing:false, smartSnap:true}};
 let view = {x0:0, y0:0, s:.06};
 const undoStack = [], redoStack = [];
@@ -935,7 +940,7 @@ function nearestPlanValue(raw, fallback, candidates, tol, axis, key){
   if(drag?.kind?.startsWith('plan-') && options.length)(drag.snapGroups ||= []).push({key,axis,options});
   const chosen=options.find(c=>drag?.snapOverride?.key===key && drag.snapOverride.id===c.id) || options[0];
   return {value:chosen?chosen.value:fallback,
-    guide:chosen?{axis,value:chosen.target,kind:chosen.kind,key,choice:options.indexOf(chosen)+1,count:options.length}:null};
+    guide:chosen?{axis,value:chosen.target,kind:chosen.kind,key,id:chosen.id,choice:options.indexOf(chosen)+1,count:options.length}:null};
 }
 function snapPlanDrawPoint(p,horizontal,slot='draw-end'){
   const q=planSnap(p);
@@ -1002,6 +1007,8 @@ function resizePlanWallEdge(w,edge,point){
 function renderEditor(){
   const g=$('#gEditor');
   if (ui.tool!=='plan'){g.innerHTML='';return;}
+  if(drag?.kind?.startsWith('plan-') && drag.moved)
+    trackSnapSound(drag,ui.snapGuides.map(guide=>`${guide.key}:${guide.id}`).sort().join('|'));
   const k=1/view.s, grip=Math.max(2.5,Math.min(6,80*view.s))*k, hit=(COARSE?18:10)*k;
   const S='stroke="#b5653a" stroke-width="2" vector-effect="non-scaling-stroke"';
   const marker=(name,id,x,y)=>`<rect ${name}="${id}" x="${x-hit/2}" y="${y-hit/2}" width="${hit}" height="${hit}" fill="transparent"/><rect x="${x-grip/2}" y="${y-grip/2}" width="${grip}" height="${grip}" fill="#fff" stroke="#2b73c5" stroke-width="1.3" vector-effect="non-scaling-stroke" pointer-events="none"/>`;
@@ -1448,16 +1455,54 @@ function toMM(e){
 }
 
 /* ======================= 吸附 ======================= */
+let snapAudioContext=null, lastSnapSoundAt=-Infinity;
+function prepareSnapAudio(){
+  if(!ui.snapSound)return;
+  const AudioContextClass=window.AudioContext || window.webkitAudioContext;
+  if(!AudioContextClass)return;
+  try{
+    snapAudioContext ||= new AudioContextClass();
+    if(snapAudioContext.state==='suspended')snapAudioContext.resume().catch(()=>{});
+  }catch(e){}
+}
+function playSnapSound(){
+  if(!ui.snapSound || !ui.layers.smartSnap || performance.now()-lastSnapSoundAt<140)return;
+  prepareSnapAudio();
+  const context=snapAudioContext;
+  if(!context || context.state!=='running')return;
+  lastSnapSoundAt=performance.now();
+  const start=context.currentTime, oscillator=context.createOscillator(), volume=context.createGain();
+  oscillator.type='triangle';
+  oscillator.frequency.setValueAtTime(700,start);
+  oscillator.frequency.linearRampToValueAtTime(420,start+.075);
+  volume.gain.setValueAtTime(0,start);
+  volume.gain.linearRampToValueAtTime(.025,start+.008);
+  volume.gain.linearRampToValueAtTime(0,start+.09);
+  oscillator.connect(volume);volume.connect(context.destination);
+  oscillator.start(start);oscillator.stop(start+.095);
+  oscillator.onended=()=>{oscillator.disconnect();volume.disconnect();};
+}
+function trackSnapSound(owner,signature){
+  if(!owner)return;
+  if(signature && signature!==owner.snapSoundSignature && owner.moved)playSnapSound();
+  owner.snapSoundSignature=signature;
+}
+function syncSnapSoundButton(){
+  const button=$('#snapSound');
+  button.classList.toggle('on',ui.snapSound);
+  button.setAttribute('aria-pressed',String(ui.snapSound));
+}
 const grid = () => 10;
-function snapMove(f, cx, cy){
+function snapMove(f, cx, cy, feedback){
   let nx = Math.round(cx/grid())*grid(), ny = Math.round(cy/grid())*grid();
-  if (!ui.layers.smartSnap) return [nx, ny];
+  if (!ui.layers.smartSnap){trackSnapSound(feedback,'');return [nx, ny];}
   const {hw, hh} = aabb(f), tol = 10/view.s;
-  let bx = tol, by = tol;
+  let bx = tol, by = tol, xTarget='', yTarget='';
   for (const r of snapRects()){
-    if (!(r[3] < cy-hh-tol || r[1] > cy+hh+tol)) for (const ex of [r[0], r[2]]) for (const c of [ex+hw, ex-hw]) if (Math.abs(c-cx) < bx){ bx = Math.abs(c-cx); nx = c; }
-    if (!(r[2] < cx-hw-tol || r[0] > cx+hw+tol)) for (const ey of [r[1], r[3]]) for (const c of [ey+hh, ey-hh]) if (Math.abs(c-cy) < by){ by = Math.abs(c-cy); ny = c; }
+    if (!(r[3] < cy-hh-tol || r[1] > cy+hh+tol)) for (const ex of [r[0], r[2]]) for (const c of [ex+hw, ex-hw]) if (Math.abs(c-cx) < bx){ bx = Math.abs(c-cx); nx = c; xTarget=`x:${ex}`; }
+    if (!(r[2] < cx-hw-tol || r[0] > cx+hw+tol)) for (const ey of [r[1], r[3]]) for (const c of [ey+hh, ey-hh]) if (Math.abs(c-cy) < by){ by = Math.abs(c-cy); ny = c; yTarget=`y:${ey}`; }
   }
+  trackSnapSound(feedback,[xTarget,yTarget].filter(Boolean).join('|'));
   return [nx, ny];
 }
 function snapPoint(p, shift){
@@ -1510,6 +1555,7 @@ function endDrag(cancel){
 
 svg.addEventListener('pointerdown', e => {
   if (e.button === 1 || e.button === 2) return;
+  prepareSnapAudio();
   closeDrawers(); $('details.menu').open = false;
   if (e.pointerType !== 'mouse'){
     touches.set(e.pointerId, {x:e.clientX, y:e.clientY});
@@ -1677,7 +1723,7 @@ svg.addEventListener('pointermove', e => {
   if (!drag.moved && !far) return;             // 轻点家具不应让它抖动一下
   drag.moved = true;
   if (drag.kind === 'move'){
-    [f.cx, f.cy] = snapMove(f, p.x-drag.ox, p.y-drag.oy);
+    [f.cx, f.cy] = snapMove(f, p.x-drag.ox, p.y-drag.oy, drag);
   } else if (drag.kind === 'rot'){
     let a = Math.atan2(p.y-f.cy, p.x-f.cx)*180/Math.PI + 90;
     f.rot = norm(e.shiftKey ? a : Math.round(a/15)*15);
@@ -1764,7 +1810,7 @@ document.addEventListener('keydown', e => {
   if (mod && k === 'd'){ e.preventDefault(); duplicateSel(); return; }
   if (mod || e.altKey) {clearCadPrefix();return;}
   if(k==='tab' && drag?.kind?.startsWith('plan-') && !is3D()){
-    e.preventDefault();clearCadPrefix();cyclePlanSnap(e.shiftKey);return;
+    e.preventDefault();clearCadPrefix();prepareSnapAudio();cyclePlanSnap(e.shiftKey);return;
   }
   if (k === '[' || k === ']'){ drawer(k === '[' ? 'lib' : 'panel'); return; }
   if (k === 'f' && e.shiftKey){ toggleFullscreen(); return; }
@@ -1938,6 +1984,12 @@ document.querySelectorAll('#layers .btn').forEach(b => b.onclick = () => {
   if (k === 'dims') $('#gDims').setAttribute('display', ui.layers.dims ? 'inline' : 'none');
   else renderAll();
 });
+$('#snapSound').onclick=()=>{
+  ui.snapSound=!ui.snapSound;
+  try{localStorage.setItem(SNAP_SOUND_STORE,ui.snapSound?'on':'off');}catch(e){}
+  syncSnapSoundButton();
+  if(ui.snapSound)prepareSnapAudio();
+};
 $('#zoomIn').onclick = () => zoomCenter(1.25);
 $('#zoomOut').onclick = () => zoomCenter(.8);
 $('#fit').onclick = fitView;
@@ -2003,7 +2055,7 @@ function setLang(l){
 }
 $('#langSel').onclick = e => { const l = e.target.closest('[data-lang]')?.dataset.lang; if (l && l !== LANG) setLang(l); };
 
-applyStaticLang(); syncFullscreen();
+applyStaticLang(); syncFullscreen(); syncSnapSoundButton();
 buildDefs(); buildLib(); renderOpenings(); renderDims();
 $('#tip').textContent = TIPS()['2d'];
 fitView(); renderAll();
@@ -2075,6 +2127,7 @@ function init(){
 
   const cv = renderer.domElement; let downAt = null, look = null;
   cv.addEventListener('pointerdown', e => {
+    prepareSnapAudio();
     downAt = [e.clientX, e.clientY]; window.closeDrawers();
     if (touchWalk && !look){ look = {id:e.pointerId, x:e.clientX, y:e.clientY}; cv.setPointerCapture(e.pointerId); }
   });
@@ -2099,7 +2152,7 @@ function init(){
     if (!fdrag.moved && Math.hypot(e.clientX - fdrag.sx, e.clientY - fdrag.sy) < TAP) return;
     const f = getF(fdrag.id), g = groundAt(e.clientX, e.clientY); if (!f || !g) return;
     fdrag.moved = true; cv.style.cursor = 'grabbing';
-    [f.cx, f.cy] = snapMove(f, g.x - fdrag.ox, g.y - fdrag.oy);
+    [f.cx, f.cy] = snapMove(f, g.x - fdrag.ox, g.y - fdrag.oy, fdrag);
     furnG.children.find(o => o.userData.fid === f.id)?.position.set(wx(f.cx), 0, wz(f.cy));   // 拖动中只挪模型，松手再整体同步
   });
   const endF = e => {
