@@ -42,6 +42,18 @@ mergeAdjacentWalls(0);
 if(WALLS.length!==3)throw Error('wall merge crossed a corner or changed type');
 `);
 check(`
+WALLS.splice(0,WALLS.length,[0,0,1000,240,'n',2800,'h'],[1150,15,2200,255,'n',2800,'h']);
+state.demolished=[];DOORS.push({rect:[1000,0,1150,240]});
+mergeAdjacentWalls(0);
+if(WALLS.length!==2)throw Error('wall merge filled a door opening');
+DOORS.pop();mergeAdjacentWalls(0);
+if(WALLS.length!==1||WALLS[0][0]!==0||WALLS[0][2]!==2200||WALLS[0][1]!==0||WALLS[0][3]!==240)
+  throw Error('near-collinear wall merge failed');
+WALLS.splice(0,WALLS.length,[0,0,1000,240,'n',2800,'h'],[1000,0,1150,240,'b',2800,'h'],[1150,0,2200,240,'n',2800,'h']);
+mergeAdjacentWalls(0);
+if(WALLS.length!==3)throw Error('wall merge overwrote an incompatible wall');
+`);
+check(`
 WALLS.splice(0,WALLS.length,[0,0,3000,240,'e',2800,'h']);state.demolished=[];
 ROOMS.push({poly:[[0,240],[3000,240],[3000,2500],[0,2500]]});
 addOpening('bay',{x:500,y:120},{x:2000,y:120},[500,0,2000,240]);

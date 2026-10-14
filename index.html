@@ -1375,28 +1375,55 @@ function repairWindowGroups(){
     }
   }
 }
-function mergeAdjacentWalls(index){
-  const chosen=WALLS[index];if(!chosen||state.demolished.includes('w'+index))return;
-  const horiz=wallIsHorizontal(chosen),a=horiz?0:1,cross=horiz?1:0;
-  const match=w=>wallIsHorizontal(w)===horiz&&w[4]===chosen[4]&&wallHeight(w)===wallHeight(chosen)&&
-    w[cross]===chosen[cross]&&w[cross+2]===chosen[cross+2];
-  const found=new Set([index]);let lo=chosen[a],hi=chosen[a+2],changed=true;
+function wallMergeRun(index){
+  const chosen=WALLS[index];if(!chosen||state.demolished.includes('w'+index))return null;
+  const horiz=wallIsHorizontal(chosen),along=horiz?0:1,cross=horiz?1:0;
+  const crossMatch=w=>wallIsHorizontal(w)===horiz&&w[4]===chosen[4]&&wallHeight(w)===wallHeight(chosen)&&
+    Math.abs(wallThickness(w)-wallThickness(chosen))<=2&&
+    Math.abs(w[cross]-chosen[cross])<=20&&Math.abs(w[cross+2]-chosen[cross+2])<=20;
+  const gapHasOpening=(start,end)=>{
+    if(end<=start)return false;
+    for(const type of ['win','door','slide','bay'])for(let i=0;i<openingList(type).length;i++){
+      const r=openingRect(type,i);
+      if(r[along]<end&&r[along+2]>start&&r[cross]<chosen[cross+2]&&r[cross+2]>chosen[cross])return true;
+    }
+    return false;
+  };
+  const indices=new Set([index]);let lo=chosen[along],hi=chosen[along+2],changed=true,blockedByOpening=false,blockedByWall=false;
   while(changed){changed=false;WALLS.forEach((w,i)=>{
-    if(found.has(i)||state.demolished.includes('w'+i)||!match(w)||w[a]>hi+2||w[a+2]<lo-2)return;
-    found.add(i);lo=Math.min(lo,w[a]);hi=Math.max(hi,w[a+2]);changed=true;
+    if(indices.has(i)||state.demolished.includes('w'+i)||!crossMatch(w))return;
+    const gap=w[along]>hi?w[along]-hi:lo>w[along+2]?lo-w[along+2]:0;
+    if(gap>200)return;
+    if(gap){
+      const start=Math.min(hi,w[along+2]),end=Math.max(lo,w[along]);
+      if(gapHasOpening(start,end)){blockedByOpening=true;return;}
+      if(WALLS.some((other,j)=>j!==i&&!indices.has(j)&&!state.demolished.includes('w'+j)&&
+        other[along]<end&&other[along+2]>start&&other[cross]<chosen[cross+2]&&other[cross+2]>chosen[cross])){
+        blockedByWall=true;return;
+      }
+    }
+    indices.add(i);lo=Math.min(lo,w[along]);hi=Math.max(hi,w[along+2]);changed=true;
   });}
-  if(found.size<2)return toast(tr('没有同线、同厚、同类型且相接的墙段','No touching collinear wall segments with matching thickness, type and height'));
+  return {indices,lo,hi,along,horiz,blockedByOpening,blockedByWall};
+}
+function mergeAdjacentWalls(index){
+  const run=wallMergeRun(index);if(!run)return;
+  const {indices,lo,hi,along,horiz,blockedByOpening,blockedByWall}=run,chosen=WALLS[index];
+  if(indices.size<2)return toast(blockedByOpening
+    ?tr('墙段之间有门窗洞口，不能直接合成实墙','An opening lies between these walls; joining them would fill it')
+    :blockedByWall?tr('墙段之间有另一面墙，不能直接合并','Another wall lies between these segments; they cannot be joined directly')
+    :tr('附近没有同线、同厚、同类型且高度相同的墙段（允许 200 mm 端点间隙和 20 mm 轴线偏差）','No nearby wall with matching line, thickness, type and height (within 200 mm end gap and 20 mm alignment)'));
   mutate(()=>{
     const oldDemolished=new Set(state.demolished.map(id=>+id.slice(1))),oldWalls=[...WALLS];
-    const merged=[...chosen];merged[a]=lo;merged[a+2]=hi;merged[5]=wallHeight(chosen);merged[6]=horiz?'h':'v';
+    const merged=[...chosen];merged[along]=lo;merged[along+2]=hi;merged[5]=wallHeight(chosen);merged[6]=horiz?'h':'v';
     const result=[],demolished=[];let selected=0;
     oldWalls.forEach((w,i)=>{
       if(i===index){selected=result.length;result.push(merged);}
-      else if(!found.has(i)){if(oldDemolished.has(i))demolished.push('w'+result.length);result.push(w);}
+      else if(!indices.has(i)){if(oldDemolished.has(i))demolished.push('w'+result.length);result.push(w);}
     });
     WALLS.splice(0,WALLS.length,...result);state.demolished=demolished;ui.sel={kind:'wall',index:selected};
   });
-  toast(tr(`已合并 ${found.size} 段墙`,`Merged ${found.size} wall segments`));
+  toast(tr(`已合并 ${indices.size} 段墙`,`Merged ${indices.size} wall segments`));
 }
 function subtractRect(w,r){
   const x0=Math.max(w[0],r[0]),y0=Math.max(w[1],r[1]),x1=Math.min(w[2],r[2]),y1=Math.min(w[3],r[3]);
@@ -1587,13 +1614,20 @@ const wallThickness = w => wallIsHorizontal(w) ? w[3]-w[1] : w[2]-w[0];
 const wallHeight = w => w[5] ?? (w[4]==='low' ? 1000 : 2800);
 function wallFields(w){
   const threeD=is3D();
+  const run=wallMergeRun(ui.sel?.index),joinCount=run?.indices.size||1;
+  const joinHint=joinCount>1
+    ?tr(`可合并 ${joinCount} 段墙；细小端点间隙会补齐，墙体轴线会对齐当前墙。`,`Found ${joinCount} wall segments; small end gaps will close and align to this wall.`)
+    :run?.blockedByOpening||run?.blockedByWall
+      ?tr('相邻墙段之间有门窗洞口或另一面墙，不能直接合成实墙。','An opening or another wall separates these segments; a solid merge would cover it.')
+      :tr('附近暂无线型、墙厚、类型和高度相符的墙段。','No nearby wall matches this line, thickness, type and height.');
   return `<section><h3>${tr('所选墙体尺寸','Selected wall dimensions')}</h3>
     <div class="form"><label>${tr('长度','Length')} (mm)<input id="wallLength" type="number" min="100" max="50000" step="1" value="${wallLength(w)}"></label>
     <label>${tr('墙厚','Thickness')} (mm)<input id="wallThickness" type="number" min="50" max="1000" step="1" value="${wallThickness(w)}"></label>
     ${threeD?`<label>${tr('高度','Height')} (mm)<input id="wallHeight" type="number" min="100" max="6000" step="1" value="${wallHeight(w)}"></label>`:''}
     <label>${tr('类型','Type')}<select id="selWallType"><option value="n" ${w[4]==='n'?'selected':''}>${tr('普通隔墙','Partition')}</option><option value="e" ${w[4]==='e'?'selected':''}>${tr('外墙','Exterior')}</option><option value="b" ${w[4]==='b'?'selected':''}>${tr('承重墙','Bearing')}</option><option value="low" ${w[4]==='low'?'selected':''}>${tr('矮墙','Low wall')}</option></select></label></div>
     <p class="muted">${threeD?tr('3D 中修改高度后立即更新；剖切墙视图会截断显示。','Height updates immediately in 3D; cutaway view clips walls.'):tr(`当前高度 ${wallHeight(w)} mm。拖动边线或蓝色中点只改该边；角点沿起始拖动方向锁定单轴。尺寸精度 1 mm。`,`Current height ${wallHeight(w)} mm. Drag an edge or blue midpoint to change only that edge; corner grips lock to the initial drag axis. Precision: 1 mm.`)}</p>
-    <div class="actions"><button class="btn" id="mergeWalls">${tr('合并同线相邻墙','Merge collinear walls')}</button><button class="btn danger" id="planDelete">${tr('删除墙体','Delete wall')}</button></div></section>`;
+    <p class="muted">${joinHint}</p>
+    <div class="actions"><button class="btn" id="mergeWalls">${tr('合并同线相邻墙','Merge collinear walls')}${joinCount>1?` (${joinCount})`:''}</button><button class="btn danger" id="planDelete">${tr('删除墙体','Delete wall')}</button></div></section>`;
 }
 function bindWallFields(){
   const selected=()=>ui.sel?.kind==='wall' && WALLS[ui.sel.index];
